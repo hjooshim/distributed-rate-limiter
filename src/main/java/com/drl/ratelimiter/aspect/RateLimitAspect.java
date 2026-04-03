@@ -2,6 +2,7 @@ package com.drl.ratelimiter.aspect;
 
 import com.drl.ratelimiter.annotation.RateLimit;
 import com.drl.ratelimiter.exception.RateLimitExceededException;
+import com.drl.ratelimiter.strategy.StrategyRegistry;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
@@ -16,6 +17,12 @@ import java.lang.reflect.Method;
 @Aspect
 @Component
 public class RateLimitAspect {
+
+    private final StrategyRegistry strategyRegistry;
+
+    public RateLimitAspect(StrategyRegistry strategyRegistry) {
+        this.strategyRegistry = strategyRegistry;
+    }
 
     /**
      * Wraps a {@link RateLimit}-annotated method call.
@@ -38,25 +45,12 @@ public class RateLimitAspect {
         int limit = rateLimit.limit();
         long windowMs = rateLimit.windowMs();
 
-        // Placeholder until the strategy layer is wired in.
-        boolean allowed = isAllowed(key, limit, windowMs);
+        boolean allowed = strategyRegistry.get("FIXED_WINDOW").isAllowed(key, limit, windowMs);
 
         if (!allowed) {
             throw new RateLimitExceededException(key, limit, windowMs);
         }
 
         return joinPoint.proceed();
-    }
-
-    /**
-     * Placeholder decision hook until the strategy layer is added.
-     *
-     * @param key rate-limit bucket key for the current method
-     * @param limit maximum number of requests allowed in the window
-     * @param windowMs length of the rate-limit window in milliseconds
-     * @return {@code true} while the concrete strategy is not wired yet
-     */
-    private boolean isAllowed(String key, int limit, long windowMs) {
-        return true;
     }
 }
