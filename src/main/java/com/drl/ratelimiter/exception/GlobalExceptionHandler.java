@@ -10,7 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Converts rate-limit rejections into HTTP 429 responses.
+ * Converts rate-limit failures into structured HTTP responses.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -39,6 +39,29 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .status(HttpStatus.TOO_MANY_REQUESTS)
                 .header("Retry-After", String.valueOf(retryAfterSeconds))
+                .body(body);
+    }
+
+    /**
+     * Builds the JSON response for a backend availability failure.
+     *
+     * @param exception backend failure raised by a distributed rate limiter
+     * @return HTTP 503 response body
+     */
+    @ExceptionHandler(RateLimitBackendUnavailableException.class)
+    public ResponseEntity<Map<String, Object>> handleRateLimitBackendUnavailable(
+            RateLimitBackendUnavailableException exception
+    ) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", HttpStatus.SERVICE_UNAVAILABLE.value());
+        body.put("error", HttpStatus.SERVICE_UNAVAILABLE.getReasonPhrase());
+        body.put("message", exception.getMessage());
+        body.put("strategy", exception.getStrategy());
+        body.put("key", exception.getKey());
+        body.put("timestamp", Instant.now().toString());
+
+        return ResponseEntity
+                .status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(body);
     }
 }

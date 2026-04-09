@@ -1,5 +1,6 @@
 package com.drl.ratelimiter.strategy;
 
+import com.drl.ratelimiter.exception.RateLimitBackendUnavailableException;
 import java.nio.charset.StandardCharsets;
 import java.io.InputStream;
 import java.util.Collections;
@@ -38,12 +39,26 @@ public abstract class AbstractRedisRateLimitStrategy extends AbstractRateLimitSt
             String logicalKey,
             String... args
     ) {
-        Long result = redisTemplate.execute(
-                script,
-                Collections.singletonList(buildRedisKey(logicalKey)),
-                args
-        );
-        return Long.valueOf(1L).equals(result);
+        String redisKey = buildRedisKey(logicalKey);
+        try {
+            Long result = redisTemplate.execute(
+                    script,
+                    Collections.singletonList(redisKey),
+                    (Object[]) args
+            );
+            if (result == null) {
+                throw new RateLimitBackendUnavailableException(
+                        getName(),
+                        redisKey,
+                        new IllegalStateException("Redis script returned null")
+                );
+            }
+            return Long.valueOf(1L).equals(result);
+        } catch (RateLimitBackendUnavailableException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw new RateLimitBackendUnavailableException(getName(), redisKey, exception);
+        }
     }
 
     protected static DefaultRedisScript<Long> loadScript(String classpathLocation) {
