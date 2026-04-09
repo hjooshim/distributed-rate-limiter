@@ -27,4 +27,11 @@ public @interface RateLimit {
      * @return window size in milliseconds
      */
     long windowMs();
+
+    /**
+     * Rate-limiting algorithm to use for the annotated method.
+     *
+     * @return strategy name, such as FIXED_WINDOW or TOKEN_BUCKET
+     */
+    String algorithm() default "FIXED_WINDOW";
 }

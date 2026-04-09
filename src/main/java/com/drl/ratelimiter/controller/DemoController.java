@@ -46,6 +46,36 @@ public class DemoController {
     }
 
     /**
+     * Endpoint backed by the token-bucket strategy for client-aware coverage.
+     *
+     * @return response body for the token-bucket demo endpoint
+     */
+    @RateLimit(limit = 1, windowMs = 60_000, algorithm = "TOKEN_BUCKET")
+    @GetMapping("/token-bucket/primary")
+    public Map<String, Object> tokenBucketPrimaryEndpoint() {
+        return Map.of(
+                "message", "Token bucket primary endpoint",
+                "limit", "1 per minute",
+                "timestamp", Instant.now().toString()
+        );
+    }
+
+    /**
+     * Second token-bucket endpoint used to prove per-endpoint isolation.
+     *
+     * @return response body for the second token-bucket demo endpoint
+     */
+    @RateLimit(limit = 1, windowMs = 60_000, algorithm = "TOKEN_BUCKET")
+    @GetMapping("/token-bucket/secondary")
+    public Map<String, Object> tokenBucketSecondaryEndpoint() {
+        return Map.of(
+                "message", "Token bucket secondary endpoint",
+                "limit", "1 per minute",
+                "timestamp", Instant.now().toString()
+        );
+    }
+
+    /**
      * Endpoint without any rate-limit annotation.
      *
      * @return response body for the free endpoint
