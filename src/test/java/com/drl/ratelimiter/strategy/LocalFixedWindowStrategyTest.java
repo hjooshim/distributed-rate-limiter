@@ -130,7 +130,10 @@ class LocalFixedWindowStrategyTest {
         LocalFixedWindowStrategy concreteStrategy = new LocalFixedWindowStrategy();
 
         concreteStrategy.isAllowed("expired-key", 1, 50);
-        Thread.sleep(80);
+        // Cleanup retains the immediately previous window to avoid rollover
+        // races, so this sleep must push the old entry at least two windows
+        // behind the current time to make removal deterministic.
+        Thread.sleep(130);
 
         for (int i = 0; i < 99; i++) {
             concreteStrategy.isAllowed("fresh-key-" + i, 1, 60_000);
