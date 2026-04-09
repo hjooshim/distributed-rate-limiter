@@ -2,6 +2,9 @@ package com.drl.ratelimiter.strategy;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -85,6 +88,18 @@ class LocalFixedWindowStrategyTest {
     }
 
     @Test
+    @DisplayName("Different window configurations should not share counters")
+    void differentWindowConfigurationsShouldNotShareCounters() {
+        long now = System.currentTimeMillis();
+        long largerWindow = now + 10_000;
+        long largestWindow = now + 20_000;
+
+        assertThat(strategy.isAllowed("shared-config-key", 1, largerWindow)).isTrue();
+        assertThat(strategy.isAllowed("shared-config-key", 2, largestWindow)).isTrue();
+        assertThat(strategy.isAllowed("shared-config-key", 2, largestWindow)).isTrue();
+    }
+
+    @Test
     @DisplayName("Limit of 1 should allow exactly 1 request")
     void limitOfOneShouldAllowExactlyOneRequest() {
         assertThat(strategy.isAllowed("single-key", 1, 60_000)).isTrue();
@@ -107,6 +122,37 @@ class LocalFixedWindowStrategyTest {
         // THEN: a new window starts, counter resets
         boolean afterReset = strategy.isAllowed("window-key", 2, 100);
         assertThat(afterReset).isTrue(); // Allowed again ✅
+    }
+
+    @Test
+    @DisplayName("Cleanup should remove expired counters even under high-cardinality low-volume traffic")
+    void cleanupShouldHandleHighCardinalityLowVolumeTraffic() throws Exception {
+        LocalFixedWindowStrategy concreteStrategy = new LocalFixedWindowStrategy();
+
+        concreteStrategy.isAllowed("expired-key", 1, 50);
+        Thread.sleep(80);
+
+        for (int i = 0; i < 99; i++) {
+            concreteStrategy.isAllowed("fresh-key-" + i, 1, 60_000);
+        }
+
+        assertThat(counterKeys(concreteStrategy))
+                .noneMatch(key -> key.startsWith("expired-key:"));
+    }
+
+    @Test
+    @DisplayName("Cleanup should keep the immediately previous window to avoid rollover races")
+    void cleanupShouldKeepPreviousWindowToAvoidRolloverRaces() throws Exception {
+        LocalFixedWindowStrategy concreteStrategy = new LocalFixedWindowStrategy();
+
+        putCounter(concreteStrategy, "late-request:100:1");
+        putCounter(concreteStrategy, "expired-request:100:0");
+
+        invokeCleanup(concreteStrategy, 250);
+
+        assertThat(counterKeys(concreteStrategy))
+                .contains("late-request:100:1")
+                .doesNotContain("expired-request:100:0");
     }
 
     // ─────────────────────────────────────────────
@@ -186,6 +232,17 @@ class LocalFixedWindowStrategyTest {
         assertThat(strategy.getName()).isEqualTo("FIXED_WINDOW");
     }
 
+    @Test
+    @DisplayName("Reset should clear cleanup cadence state")
+    void resetShouldClearCleanupCadenceState() throws Exception {
+        LocalFixedWindowStrategy concreteStrategy = new LocalFixedWindowStrategy();
+
+        concreteStrategy.isAllowed("reset-key", 10, 60_000);
+        concreteStrategy.reset();
+
+        assertThat(totalRequests(concreteStrategy)).isZero();
+    }
+
     @RepeatedTest(10)
     @DisplayName("High Intensity Stress Test: 500 Threads Contention")
     void highIntensityStressTest() throws InterruptedException {
@@ -241,5 +298,38 @@ class LocalFixedWindowStrategyTest {
 
         System.out.printf("[Stress Test] Throughput: %d requests | Duration: %d ms | Avg Latency: %.4f ms\n",
             threadCount, durationMs, avgLatencyMs);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Iterable<String> counterKeys(LocalFixedWindowStrategy strategy)
+            throws NoSuchFieldException, IllegalAccessException {
+        Field countersField = LocalFixedWindowStrategy.class.getDeclaredField("counters");
+        countersField.setAccessible(true);
+        return ((Map<String, ?>) countersField.get(strategy)).keySet();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void putCounter(LocalFixedWindowStrategy strategy, String key)
+            throws NoSuchFieldException, IllegalAccessException {
+        Field countersField = LocalFixedWindowStrategy.class.getDeclaredField("counters");
+        countersField.setAccessible(true);
+        Map<String, Object> counters = (Map<String, Object>) countersField.get(strategy);
+        counters.put(key, new LocalFixedWindowStrategy.WindowCounter());
+    }
+
+    private void invokeCleanup(LocalFixedWindowStrategy strategy, long currentTimeMs)
+            throws Exception {
+        Method cleanupMethod = LocalFixedWindowStrategy.class
+                .getDeclaredMethod("cleanupOldWindows", long.class);
+        cleanupMethod.setAccessible(true);
+        cleanupMethod.invoke(strategy, currentTimeMs);
+    }
+
+    private long totalRequests(LocalFixedWindowStrategy strategy)
+            throws NoSuchFieldException, IllegalAccessException {
+        Field totalRequestsField = LocalFixedWindowStrategy.class
+                .getDeclaredField("totalRequests");
+        totalRequestsField.setAccessible(true);
+        return ((java.util.concurrent.atomic.AtomicLong) totalRequestsField.get(strategy)).get();
     }
 }

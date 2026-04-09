@@ -3,6 +3,7 @@ package com.drl.ratelimiter.strategy;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * ============================================================
@@ -47,24 +48,32 @@ import java.util.concurrent.ConcurrentHashMap;
  *   This is acceptable for Week 1. Week 2 fixes this with Sliding Window.
  */
 @Component
-public class LocalFixedWindowStrategy implements RateLimitStrategy {
+public class LocalFixedWindowStrategy extends AbstractRateLimitStrategy {
 
-    // Key = "userId:method:windowId"
-    // Value = WindowCounter (holds count + window start time)
+    // Key = "userId:method:windowMs:windowId"
+    // Value = WindowCounter (holds count for that configured window)
     private final ConcurrentHashMap<String, WindowCounter> counters
             = new ConcurrentHashMap<>();
+    private final AtomicLong totalRequests = new AtomicLong(0);
+
+    public LocalFixedWindowStrategy() {
+        super("FIXED_WINDOW");
+    }
 
     @Override
-    public boolean isAllowed(String key, int limit, long windowMs) {
+    protected boolean doIsAllowed(String key, int limit, long windowMs) {
+        long nowMs = System.currentTimeMillis();
+
         // Step 1: Calculate which window we're currently in.
         // windowId changes every `windowMs` milliseconds.
         // e.g., with windowMs=60000: windowId=0 for first minute,
         //        windowId=1 for second minute, etc.
-        long windowId = System.currentTimeMillis() / windowMs;
+        long windowId = nowMs / windowMs;
 
-        // Step 2: Build a compound key = original key + current window ID
-        // This means each time window gets its own separate counter.
-        String windowKey = key + ":" + windowId;
+        // Step 2: Build a compound key = original key + configured window size
+        // + current window ID. This keeps different policies isolated even
+        // if two window sizes would otherwise produce the same quotient.
+        String windowKey = key + ":" + windowMs + ":" + windowId;
 
         // Step 3: Get or create a counter for this window.
         // computeIfAbsent is atomic — safe under concurrent access.
@@ -80,16 +89,11 @@ public class LocalFixedWindowStrategy implements RateLimitStrategy {
         // to prevent unbounded memory growth.
         // We only clean up occasionally (every 100 requests) to avoid
         // performance overhead on every single request.
-        if (currentCount % 100 == 0) {
-            cleanupOldWindows(windowId);
+        if (totalRequests.incrementAndGet() % 100 == 0) {
+            cleanupOldWindows(nowMs);
         }
 
         return currentCount <= limit;
-    }
-
-    @Override
-    public String getName() {
-        return "FIXED_WINDOW";
     }
 
     /**
@@ -99,19 +103,27 @@ public class LocalFixedWindowStrategy implements RateLimitStrategy {
      * This is a simplified cleanup — production systems would use
      * a scheduled task or TTL-based expiry instead.
      */
-    private void cleanupOldWindows(long currentWindowId) {
+    private void cleanupOldWindows(long currentTimeMs) {
         counters.entrySet().removeIf(entry -> {
-            // Extract the windowId from the compound key
-            // Key format: "originalKey:windowId"
+            // Extract the window configuration from the compound key.
+            // Key format: "originalKey:windowMs:windowId"
             String entryKey = entry.getKey();
             int lastColon = entryKey.lastIndexOf(':');
             if (lastColon < 0) return false;
+            int secondLastColon = entryKey.lastIndexOf(':', lastColon - 1);
+            if (secondLastColon < 0) return false;
             try {
+                long entryWindowMs = Long.parseLong(
+                        entryKey.substring(secondLastColon + 1, lastColon)
+                );
                 long entryWindowId = Long.parseLong(
                         entryKey.substring(lastColon + 1)
                 );
-                // Remove if this counter belongs to a previous window
-                return entryWindowId < currentWindowId;
+                long currentWindowId = currentTimeMs / entryWindowMs;
+                long oldestRetainedWindowId = Math.max(0, currentWindowId - 1);
+                // Keep the immediately previous window so delayed requests
+                // around a rollover cannot recreate an already-evicted bucket.
+                return entryWindowId < oldestRetainedWindowId;
             } catch (NumberFormatException e) {
                 return false;
             }
@@ -125,6 +137,7 @@ public class LocalFixedWindowStrategy implements RateLimitStrategy {
      */
     public void reset() {
         counters.clear();
+        totalRequests.set(0);
     }
 
     /**
