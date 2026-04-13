@@ -34,14 +34,14 @@ public abstract class AbstractRedisRateLimitStrategy extends AbstractRateLimitSt
         return Math.max(windowMs * 2, 1_000L);
     }
 
-    protected final boolean executeAllowDenyScript(
-            DefaultRedisScript<Long> script,
+    protected final RateLimitDecision executeDecisionScript(
+            DefaultRedisScript<String> script,
             String logicalKey,
             String... args
     ) {
         String redisKey = buildRedisKey(logicalKey);
         try {
-            Long result = redisTemplate.execute(
+            String result = redisTemplate.execute(
                     script,
                     Collections.singletonList(redisKey),
                     (Object[]) args
@@ -53,7 +53,7 @@ public abstract class AbstractRedisRateLimitStrategy extends AbstractRateLimitSt
                         new IllegalStateException("Redis script returned null")
                 );
             }
-            return Long.valueOf(1L).equals(result);
+            return parseDecision(result, redisKey);
         } catch (RateLimitBackendUnavailableException exception) {
             throw exception;
         } catch (RuntimeException exception) {
@@ -61,15 +61,41 @@ public abstract class AbstractRedisRateLimitStrategy extends AbstractRateLimitSt
         }
     }
 
-    protected static DefaultRedisScript<Long> loadScript(String classpathLocation) {
+    protected static <T> DefaultRedisScript<T> loadScript(String classpathLocation, Class<T> resultType) {
         try (InputStream inputStream = new ClassPathResource(classpathLocation).getInputStream()) {
             String scriptText = StreamUtils.copyToString(inputStream, StandardCharsets.UTF_8);
-            DefaultRedisScript<Long> script = new DefaultRedisScript<>();
-            script.setResultType(Long.class);
+            DefaultRedisScript<T> script = new DefaultRedisScript<>();
+            script.setResultType(resultType);
             script.setScriptText(scriptText);
             return script;
         } catch (Exception e) {
             throw new IllegalStateException("Failed to load Redis Lua script: " + classpathLocation, e);
+        }
+    }
+
+    private RateLimitDecision parseDecision(String result, String redisKey) {
+        String[] parts = result.split(":");
+        if (parts.length != 2) {
+            throw new RateLimitBackendUnavailableException(
+                    getName(),
+                    redisKey,
+                    new IllegalStateException("Malformed Redis decision '" + result + "'")
+            );
+        }
+
+        try {
+            long allowedFlag = Long.parseLong(parts[0]);
+            long retryAfterSeconds = Long.parseLong(parts[1]);
+            if (allowedFlag == 1L) {
+                return RateLimitDecision.allowed();
+            }
+            return RateLimitDecision.rejected(retryAfterSeconds);
+        } catch (NumberFormatException exception) {
+            throw new RateLimitBackendUnavailableException(
+                    getName(),
+                    redisKey,
+                    new IllegalStateException("Malformed Redis decision '" + result + "'", exception)
+            );
         }
     }
 }

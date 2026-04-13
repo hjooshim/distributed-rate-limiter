@@ -25,9 +25,13 @@ public interface RateLimitStrategy {
      *                 Usually built as "userId:methodName" or "ip:endpoint".
      * @param limit    Maximum number of requests allowed within the window.
      * @param windowMs Length of the time window in milliseconds.
-     * @return true if the request is allowed; false if it should be rejected.
+     * @return full decision metadata for the current request.
      */
-    boolean isAllowed(String key, int limit, long windowMs);
+    RateLimitDecision evaluate(String key, int limit, long windowMs);
+
+    default boolean isAllowed(String key, int limit, long windowMs) {
+        return evaluate(key, limit, windowMs).isAllowed();
+    }
 
   /**
    * Returns the name of this strategy. Used by StrategyRegistry to look up the correct

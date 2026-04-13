@@ -34,11 +34,9 @@ public class GlobalExceptionHandler {
         body.put("windowMs", exception.getWindowMs());
         body.put("timestamp", Instant.now().toString());
 
-        long retryAfterSeconds = Math.max(1L, exception.getWindowMs() / 1000L);
-
         return ResponseEntity
                 .status(HttpStatus.TOO_MANY_REQUESTS)
-                .header("Retry-After", String.valueOf(retryAfterSeconds))
+                .header("Retry-After", String.valueOf(exception.getRetryAfterSeconds()))
                 .body(body);
     }
 

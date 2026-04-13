@@ -22,12 +22,17 @@ else
 end
 
 local allowed = 0
+local retryAfterSeconds = 0
 if tokens >= requestedTokens then
   tokens = tokens - requestedTokens
   allowed = 1
+else
+  local missingTokens = requestedTokens - tokens
+  local waitMs = math.ceil((missingTokens * windowMs) / capacity)
+  retryAfterSeconds = math.max(1, math.ceil(waitMs / 1000))
 end
 
 redis.call('HSET', key, 'tokens', tokens, 'lastRefillMs', lastRefillMs)
 redis.call('PEXPIRE', key, ttlMs)
 
-return allowed
+return tostring(allowed) .. ':' .. tostring(retryAfterSeconds)

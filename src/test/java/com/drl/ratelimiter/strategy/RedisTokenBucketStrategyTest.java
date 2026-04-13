@@ -107,6 +107,22 @@ class RedisTokenBucketStrategyTest {
     }
 
     @Test
+    @DisplayName("Rejected decisions should report time until the next token is available")
+    void rejectedDecisionsShouldReportTimeUntilNextTokenIsAvailable() throws InterruptedException {
+        String key = uniqueKey("retry-after");
+
+        assertThat(strategy.evaluate(key, 2, 4_000).isAllowed()).isTrue();
+        assertThat(strategy.evaluate(key, 2, 4_000).isAllowed()).isTrue();
+
+        Thread.sleep(1_200);
+
+        RateLimitDecision decision = strategy.evaluate(key, 2, 4_000);
+
+        assertThat(decision.isAllowed()).isFalse();
+        assertThat(decision.getRetryAfterSeconds()).isEqualTo(1L);
+    }
+
+    @Test
     @DisplayName("Different keys should be independent")
     void differentKeysShouldBeIndependent() {
         String keyA = uniqueKey("key-a");

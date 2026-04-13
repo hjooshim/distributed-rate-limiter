@@ -12,11 +12,11 @@ public abstract class AbstractRateLimitStrategy implements RateLimitStrategy {
     }
 
     @Override
-    public final boolean isAllowed(String key, int limit, long windowMs) {
+    public final RateLimitDecision evaluate(String key, int limit, long windowMs) {
         validateKey(key);
         validateLimit(limit);
         validateWindowMs(windowMs);
-        return doIsAllowed(key, limit, windowMs);
+        return doEvaluate(key, limit, windowMs);
     }
 
     @Override
@@ -24,7 +24,7 @@ public abstract class AbstractRateLimitStrategy implements RateLimitStrategy {
         return name;
     }
 
-    protected abstract boolean doIsAllowed(String key, int limit, long windowMs);
+    protected abstract RateLimitDecision doEvaluate(String key, int limit, long windowMs);
 
     private void validateKey(String key) {
         if (key == null || key.isBlank()) {

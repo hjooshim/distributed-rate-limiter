@@ -8,6 +8,7 @@ public class RateLimitExceededException extends RuntimeException {
     private final String key;
     private final int limit;
     private final long windowMs;
+    private final long retryAfterSeconds;
 
     /**
      * Creates an exception for a rejected request.
@@ -17,6 +18,10 @@ public class RateLimitExceededException extends RuntimeException {
      * @param windowMs configured window length in milliseconds
      */
     public RateLimitExceededException(String key, int limit, long windowMs) {
+        this(key, limit, windowMs, Math.max(1L, (windowMs + 999L) / 1_000L));
+    }
+
+    public RateLimitExceededException(String key, int limit, long windowMs, long retryAfterSeconds) {
         super(String.format(
                 "Rate limit exceeded for key '%s': max %d requests per %dms",
                 key,
@@ -26,6 +31,7 @@ public class RateLimitExceededException extends RuntimeException {
         this.key = key;
         this.limit = limit;
         this.windowMs = windowMs;
+        this.retryAfterSeconds = retryAfterSeconds;
     }
 
     /**
@@ -53,5 +59,9 @@ public class RateLimitExceededException extends RuntimeException {
      */
     public long getWindowMs() {
         return windowMs;
+    }
+
+    public long getRetryAfterSeconds() {
+        return retryAfterSeconds;
     }
 }

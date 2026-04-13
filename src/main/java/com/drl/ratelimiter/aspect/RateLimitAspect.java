@@ -2,6 +2,7 @@ package com.drl.ratelimiter.aspect;
 
 import com.drl.ratelimiter.annotation.RateLimit;
 import com.drl.ratelimiter.exception.RateLimitExceededException;
+import com.drl.ratelimiter.strategy.RateLimitDecision;
 import com.drl.ratelimiter.strategy.StrategyRegistry;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
@@ -51,10 +52,15 @@ public class RateLimitAspect {
         long windowMs = rateLimit.windowMs();
         String algorithm = rateLimit.algorithm();
 
-        boolean allowed = strategyRegistry.get(algorithm).isAllowed(key, limit, windowMs);
+        RateLimitDecision decision = strategyRegistry.get(algorithm).evaluate(key, limit, windowMs);
 
-        if (!allowed) {
-            throw new RateLimitExceededException(key, limit, windowMs);
+        if (!decision.isAllowed()) {
+            throw new RateLimitExceededException(
+                    key,
+                    limit,
+                    windowMs,
+                    decision.getRetryAfterSeconds()
+            );
         }
 
         return joinPoint.proceed();

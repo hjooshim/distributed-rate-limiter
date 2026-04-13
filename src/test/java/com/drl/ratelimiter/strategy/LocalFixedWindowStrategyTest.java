@@ -125,6 +125,22 @@ class LocalFixedWindowStrategyTest {
     }
 
     @Test
+    @DisplayName("Rejected decisions should report the remaining time in the active window")
+    void rejectedDecisionsShouldReportRemainingTimeInActiveWindow() throws InterruptedException {
+        LocalFixedWindowStrategy concreteStrategy = new LocalFixedWindowStrategy();
+        long windowMs = System.currentTimeMillis() + 2_000;
+
+        assertThat(concreteStrategy.evaluate("retry-after-key", 1, windowMs).isAllowed()).isTrue();
+
+        Thread.sleep(1_200);
+
+        RateLimitDecision decision = concreteStrategy.evaluate("retry-after-key", 1, windowMs);
+
+        assertThat(decision.isAllowed()).isFalse();
+        assertThat(decision.getRetryAfterSeconds()).isEqualTo(1L);
+    }
+
+    @Test
     @DisplayName("Cleanup should remove expired counters even under high-cardinality low-volume traffic")
     void cleanupShouldHandleHighCardinalityLowVolumeTraffic() throws Exception {
         LocalFixedWindowStrategy concreteStrategy = new LocalFixedWindowStrategy();

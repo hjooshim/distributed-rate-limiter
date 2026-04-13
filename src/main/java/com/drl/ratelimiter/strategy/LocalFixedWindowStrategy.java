@@ -61,7 +61,7 @@ public class LocalFixedWindowStrategy extends AbstractRateLimitStrategy {
     }
 
     @Override
-    protected boolean doIsAllowed(String key, int limit, long windowMs) {
+    protected RateLimitDecision doEvaluate(String key, int limit, long windowMs) {
         long nowMs = System.currentTimeMillis();
 
         // Step 1: Calculate which window we're currently in.
@@ -93,7 +93,13 @@ public class LocalFixedWindowStrategy extends AbstractRateLimitStrategy {
             cleanupOldWindows(nowMs);
         }
 
-        return currentCount <= limit;
+        if (currentCount <= limit) {
+            return RateLimitDecision.allowed();
+        }
+
+        long elapsedInWindowMs = nowMs % windowMs;
+        long remainingWindowMs = Math.max(1L, windowMs - elapsedInWindowMs);
+        return RateLimitDecision.rejected(toRetryAfterSeconds(remainingWindowMs));
     }
 
     /**
@@ -138,6 +144,10 @@ public class LocalFixedWindowStrategy extends AbstractRateLimitStrategy {
     public void reset() {
         counters.clear();
         totalRequests.set(0);
+    }
+
+    private long toRetryAfterSeconds(long remainingWindowMs) {
+        return Math.max(1L, (remainingWindowMs + 999L) / 1_000L);
     }
 
     /**

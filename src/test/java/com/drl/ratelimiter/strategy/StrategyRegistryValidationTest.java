@@ -114,8 +114,8 @@ class StrategyRegistryValidationTest {
         }
 
         @Override
-        public boolean isAllowed(String key, int limit, long windowMs) {
-            return true;
+        public RateLimitDecision evaluate(String key, int limit, long windowMs) {
+            return RateLimitDecision.allowed();
         }
 
         @Override

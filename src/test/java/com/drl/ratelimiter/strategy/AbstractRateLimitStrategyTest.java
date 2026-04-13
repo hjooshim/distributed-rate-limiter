@@ -77,9 +77,9 @@ class AbstractRateLimitStrategyTest {
         }
 
         @Override
-        protected boolean doIsAllowed(String key, int limit, long windowMs) {
+        protected RateLimitDecision doEvaluate(String key, int limit, long windowMs) {
             called = true;
-            return true;
+            return RateLimitDecision.allowed();
         }
 
         private boolean wasCalled() {
