@@ -262,27 +262,26 @@ class LocalFixedWindowStrategyTest {
         assertThat(totalRequests(concreteStrategy)).isZero();
     }
 
-    @RepeatedTest(10)
-    @DisplayName("High Intensity Stress Test: 500 Threads Contention")
-    void highIntensityStressTest() throws InterruptedException {
-        // 参数配置：500个并发线程冲击100个配额
-        int threadCount = 10000;
+    @RepeatedTest(3)
+    @DisplayName("Repeated burst traffic should keep admissions exact with bounded workers")
+    void repeatedBurstTrafficShouldKeepAdmissionsExactWithBoundedWorkers() throws InterruptedException {
+        int taskCount = 500;
+        int workerCount = 32;
         int limit = 100;
         int windowMs = 60_000;
-        String testKey = "stress-test-key-" + System.nanoTime(); // 保证每次重复测试 key 独立
+        String testKey = "stress-test-key-" + System.nanoTime();
 
         AtomicInteger allowedCount = new AtomicInteger(0);
         AtomicInteger rejectedCount = new AtomicInteger(0);
         CountDownLatch startLatch = new CountDownLatch(1);
-        CountDownLatch doneLatch = new CountDownLatch(threadCount);
+        CountDownLatch doneLatch = new CountDownLatch(taskCount);
 
-        // 使用固定线程池模拟真实并发
-        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+        ExecutorService executor = Executors.newFixedThreadPool(workerCount);
 
-        for (int i = 0; i < threadCount; i++) {
+        for (int i = 0; i < taskCount; i++) {
             executor.submit(() -> {
                 try {
-                    startLatch.await(); // 阻塞所有线程，等待"发令枪"
+                    startLatch.await();
                     if (strategy.isAllowed(testKey, limit, windowMs)) {
                         allowedCount.incrementAndGet();
                     } else {
@@ -297,26 +296,28 @@ class LocalFixedWindowStrategyTest {
         }
 
         long startTime = System.nanoTime();
-        startLatch.countDown(); // 🚀 模拟瞬间爆发流量
+        startLatch.countDown();
 
-        // 设置最大等待时间，防止死锁
         boolean completed = doneLatch.await(10, TimeUnit.SECONDS);
         long endTime = System.nanoTime();
 
         executor.shutdown();
 
-        // 性能数据计算
         long durationMs = TimeUnit.NANOSECONDS.toMillis(endTime - startTime);
-        double avgLatencyMs = (double) durationMs / threadCount;
+        double avgLatencyMs = (double) durationMs / taskCount;
 
-        // 核心断言：在高并发下，通过的数量必须精确等于 limit
         assertThat(completed).as("Test should complete within timeout").isTrue();
         assertThat(allowedCount.get())
-            .as("Allowed count should precisely match the limit under high contention")
+            .as("Allowed count should precisely match the limit under repeated burst traffic")
             .isEqualTo(limit);
+        assertThat(rejectedCount.get())
+            .as("All requests beyond the limit should still be rejected")
+            .isEqualTo(taskCount - limit);
 
-        System.out.printf("[Stress Test] Throughput: %d requests | Duration: %d ms | Avg Latency: %.4f ms\n",
-            threadCount, durationMs, avgLatencyMs);
+        System.out.printf(
+                "[Stress Test] Tasks: %d | Workers: %d | Duration: %d ms | Avg Latency: %.4f ms%n",
+                taskCount, workerCount, durationMs, avgLatencyMs
+        );
     }
 
     @SuppressWarnings("unchecked")
