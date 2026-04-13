@@ -1,10 +1,10 @@
 package com.drl.ratelimiter.strategy;
 
-import org.springframework.stereotype.Component;
-
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import org.springframework.stereotype.Component;
 
 /**
  * ============================================================
@@ -35,12 +35,7 @@ import java.util.Map;
 @Component
 public class StrategyRegistry {
 
-    private final Map<String, RateLimitStrategy> strategies = new HashMap<>();
-
-    // Fallback used when the requested strategy name doesn't exist.
-    // Fail-open: returns true (allow) so the app doesn't crash if
-    // someone misspells an algorithm name.
-    private final RateLimitStrategy fallback;
+    private final Map<String, RateLimitStrategy> strategies;
 
     /**
      * Constructor injection — Spring passes in all RateLimitStrategy beans.
@@ -49,20 +44,39 @@ public class StrategyRegistry {
      *                     collected automatically by Spring.
      */
     public StrategyRegistry(List<RateLimitStrategy> strategyList) {
+        Map<String, RateLimitStrategy> resolvedStrategies = new HashMap<>();
         for (RateLimitStrategy strategy : strategyList) {
-            strategies.put(strategy.getName(), strategy);
+            String name = strategy.getName();
+            if (name == null || name.isBlank()) {
+                throw new IllegalStateException("Rate limit strategy names must not be blank");
+            }
+            RateLimitStrategy previous = resolvedStrategies.putIfAbsent(name, strategy);
+            if (previous != null) {
+                throw new IllegalStateException("Duplicate rate limit strategy name '" + name + "'");
+            }
         }
-        // Default fallback: allow everything (fail-open behavior)
-        this.fallback = (key, limit, windowMs) -> true;
+        this.strategies = Map.copyOf(resolvedStrategies);
     }
 
     /**
      * Look up a strategy by name.
      *
      * @param name Strategy name, e.g. "FIXED_WINDOW", "TOKEN_BUCKET"
-     * @return The matching strategy, or the fail-open fallback if not found.
+     * @return The matching strategy.
      */
     public RateLimitStrategy get(String name) {
-        return strategies.getOrDefault(name, fallback);
+        RateLimitStrategy strategy = strategies.get(name);
+        if (strategy == null) {
+            throw new IllegalArgumentException("Unknown rate limit strategy '" + name + "'");
+        }
+        return strategy;
+    }
+
+    public boolean contains(String name) {
+        return strategies.containsKey(name);
+    }
+
+    public Set<String> names() {
+        return strategies.keySet();
     }
 }
