@@ -2,6 +2,7 @@ package com.drl.ratelimiter.aspect;
 
 import com.drl.ratelimiter.annotation.RateLimit;
 import com.drl.ratelimiter.exception.RateLimitExceededException;
+import com.drl.ratelimiter.identity.ClientIdentityResolver;
 import com.drl.ratelimiter.strategy.RateLimitDecision;
 import com.drl.ratelimiter.strategy.StrategyRegistry;
 import org.aspectj.lang.ProceedingJoinPoint;
@@ -9,12 +10,8 @@ import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.stereotype.Component;
-import org.springframework.web.context.request.RequestAttributes;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.lang.reflect.Method;
-import java.util.Arrays;
 
 /**
  * Intercepts methods annotated with {@link RateLimit}.
@@ -24,9 +21,14 @@ import java.util.Arrays;
 public class RateLimitAspect {
 
     private final StrategyRegistry strategyRegistry;
+    private final ClientIdentityResolver clientIdentityResolver;
 
-    public RateLimitAspect(StrategyRegistry strategyRegistry) {
+    public RateLimitAspect(
+            StrategyRegistry strategyRegistry,
+            ClientIdentityResolver clientIdentityResolver
+    ) {
         this.strategyRegistry = strategyRegistry;
+        this.clientIdentityResolver = clientIdentityResolver;
     }
 
     /**
@@ -45,7 +47,7 @@ public class RateLimitAspect {
         Method method = signature.getMethod();
         String className = signature.getDeclaringType().getSimpleName();
         String methodName = method.getName();
-        String clientId = resolveClientId();
+        String clientId = clientIdentityResolver.resolveCurrentClientId();
 
         String key = className + "." + methodName + ":" + clientId;
         int limit = rateLimit.limit();
@@ -64,37 +66,5 @@ public class RateLimitAspect {
         }
 
         return joinPoint.proceed();
-    }
-
-    private String resolveClientId() {
-        RequestAttributes requestAttributes = RequestContextHolder.getRequestAttributes();
-        if (!(requestAttributes instanceof ServletRequestAttributes servletRequestAttributes)) {
-            return "unknown-client";
-        }
-
-        String forwardedFor = servletRequestAttributes.getRequest().getHeader("X-Forwarded-For");
-        String forwardedClient = firstForwardedValue(forwardedFor);
-        if (forwardedClient != null) {
-            return forwardedClient;
-        }
-
-        String remoteAddress = servletRequestAttributes.getRequest().getRemoteAddr();
-        if (remoteAddress != null && !remoteAddress.isBlank()) {
-            return remoteAddress.trim();
-        }
-
-        return "unknown-client";
-    }
-
-    private String firstForwardedValue(String forwardedFor) {
-        if (forwardedFor == null || forwardedFor.isBlank()) {
-            return null;
-        }
-
-        return Arrays.stream(forwardedFor.split(","))
-                .map(String::trim)
-                .filter(value -> !value.isBlank())
-                .findFirst()
-                .orElse(null);
     }
 }

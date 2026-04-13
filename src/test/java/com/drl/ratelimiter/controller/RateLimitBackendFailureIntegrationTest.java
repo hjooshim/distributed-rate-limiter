@@ -18,7 +18,8 @@ import org.springframework.test.web.servlet.MockMvc;
                 "spring.data.redis.host=127.0.0.1",
                 "spring.data.redis.port=1",
                 "spring.data.redis.timeout=250ms",
-                "spring.data.redis.connect-timeout=250ms"
+                "spring.data.redis.connect-timeout=250ms",
+                "ratelimit.identity.trust-forwarded-header=true"
         }
 )
 @AutoConfigureMockMvc
@@ -38,7 +39,7 @@ class RateLimitBackendFailureIntegrationTest {
                 .andExpect(jsonPath("$.message").value(containsString("Rate limit backend unavailable")))
                 .andExpect(jsonPath("$.strategy").value("TOKEN_BUCKET"))
                 .andExpect(jsonPath("$.key").value(
-                        "rate_limit:token_bucket:DemoController.tokenBucketPrimaryEndpoint:203.0.113.30:1:60000"
+                        "rate_limit:token_bucket:DemoController.tokenBucketPrimaryEndpoint:ip:203.0.113.30:1:60000"
                 ))
                 .andExpect(jsonPath("$.timestamp").exists());
     }

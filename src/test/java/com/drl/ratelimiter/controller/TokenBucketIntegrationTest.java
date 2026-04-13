@@ -21,7 +21,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 @Testcontainers
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "ratelimit.identity.trust-forwarded-header=true"
+)
 @AutoConfigureMockMvc
 class TokenBucketIntegrationTest {
 
@@ -91,6 +94,26 @@ class TokenBucketIntegrationTest {
         mockMvc.perform(get("/api/token-bucket/secondary")
                         .header("X-Forwarded-For", "203.0.113.20"))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Trusted forwarded header should use the first trimmed client value")
+    void trustedForwardedHeaderShouldUseTheFirstTrimmedClientValue() throws Exception {
+        mockMvc.perform(get("/api/token-bucket/primary")
+                        .header("X-Forwarded-For", " 203.0.113.55 , 10.0.0.1 ")
+                        .with(request -> {
+                            request.setRemoteAddr("198.51.100.99");
+                            return request;
+                        }))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/token-bucket/primary")
+                        .header("X-Forwarded-For", "203.0.113.55")
+                        .with(request -> {
+                            request.setRemoteAddr("198.51.100.98");
+                            return request;
+                        }))
+                .andExpect(status().isTooManyRequests());
     }
 
     @Test

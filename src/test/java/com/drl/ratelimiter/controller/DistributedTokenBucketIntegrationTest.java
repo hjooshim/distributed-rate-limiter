@@ -81,6 +81,7 @@ class DistributedTokenBucketIntegrationTest {
                 .properties(
                         "server.port=0",
                         "spring.application.name=distributed-rate-limiter-" + nodeName,
+                        "ratelimit.identity.trust-forwarded-header=true",
                         "spring.data.redis.host=" + redis.getHost(),
                         "spring.data.redis.port=" + redis.getMappedPort(6379)
                 )
