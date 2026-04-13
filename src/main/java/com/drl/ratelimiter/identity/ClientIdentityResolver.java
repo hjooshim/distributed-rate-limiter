@@ -7,6 +7,13 @@ import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
+/**
+ * Resolves the current client identity used in rate-limit keys.
+ *
+ * <p>The resolver prefers authenticated principals, optionally trusts a configured forwarded
+ * header, falls back to the remote IP address, and uses {@code unknown-client} only when no
+ * request-bound identity is available.
+ */
 @Component
 public class ClientIdentityResolver {
 
@@ -16,10 +23,20 @@ public class ClientIdentityResolver {
 
     private final RateLimitIdentityProperties properties;
 
+    /**
+     * Creates a resolver using the configured identity properties.
+     *
+     * @param properties rate-limit identity configuration
+     */
     public ClientIdentityResolver(RateLimitIdentityProperties properties) {
         this.properties = properties;
     }
 
+    /**
+     * Resolves the current client id for the active request context.
+     *
+     * @return namespaced client id such as {@code principal:alice} or {@code ip:203.0.113.10}
+     */
     public String resolveCurrentClientId() {
         RequestAttributes requestAttributes = RequestContextHolder.getRequestAttributes();
         if (!(requestAttributes instanceof ServletRequestAttributes servletRequestAttributes)) {

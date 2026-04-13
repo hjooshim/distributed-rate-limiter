@@ -1,9 +1,17 @@
 package com.drl.ratelimiter.strategy;
 
+/**
+ * Base implementation for rate-limit strategies that share input validation and naming.
+ */
 public abstract class AbstractRateLimitStrategy implements RateLimitStrategy {
 
     private final String name;
 
+    /**
+     * Creates a named strategy.
+     *
+     * @param name stable algorithm name used for registry lookup
+     */
     protected AbstractRateLimitStrategy(String name) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("name must not be blank");
@@ -24,6 +32,14 @@ public abstract class AbstractRateLimitStrategy implements RateLimitStrategy {
         return name;
     }
 
+    /**
+     * Evaluates a request after the shared validation layer has accepted the input.
+     *
+     * @param key logical rate-limit key
+     * @param limit request limit or bucket capacity
+     * @param windowMs time window or refill window in milliseconds
+     * @return decision produced by the concrete strategy
+     */
     protected abstract RateLimitDecision doEvaluate(String key, int limit, long windowMs);
 
     private void validateKey(String key) {

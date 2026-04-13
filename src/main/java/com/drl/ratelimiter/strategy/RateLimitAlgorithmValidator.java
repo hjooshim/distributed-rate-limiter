@@ -21,6 +21,12 @@ public class RateLimitAlgorithmValidator implements SmartLifecycle {
     private final StrategyRegistry strategyRegistry;
     private volatile boolean running;
 
+    /**
+     * Creates the startup validator for configured rate-limit algorithms.
+     *
+     * @param beanFactory bean factory used to inspect application beans
+     * @param strategyRegistry registry used to verify configured algorithm names
+     */
     public RateLimitAlgorithmValidator(
             ListableBeanFactory beanFactory,
             StrategyRegistry strategyRegistry
