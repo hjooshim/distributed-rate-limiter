@@ -14,7 +14,36 @@ import org.springframework.stereotype.Component;
 import java.lang.reflect.Method;
 
 /**
- * Intercepts methods annotated with {@link RateLimit}.
+ * ============================================================
+ * ASPECT-ORIENTED PROGRAMMING (AOP) - Cross-Cutting Rate Limiting
+ * ============================================================
+ *
+ * PURPOSE:
+ *   Enforces {@link RateLimit} without requiring controller or service methods
+ *   to call the rate-limiter manually.
+ *
+ * HOW IT WORKS:
+ *   When Spring AOP sees a method annotated with {@link RateLimit}, it routes
+ *   the method call through this aspect first.
+ *
+ *   This aspect then:
+ *     1. Reads the intercepted method and its annotation values
+ *     2. Resolves who the caller is (principal or IP-based identity)
+ *     3. Builds a stable rate-limit key for "method + caller"
+ *     4. Looks up the configured algorithm in the strategy registry
+ *     5. Asks that strategy whether this request is allowed
+ *     6. Throws HTTP 429 metadata if rejected, or proceeds if allowed
+ *
+ * WHY AOP IS A GOOD FIT:
+ *   Rate limiting is cross-cutting behavior. Many endpoints may need it, but
+ *   none of them should contain repeated boilerplate like:
+ *     - resolve caller identity
+ *     - build a rate-limit key
+ *     - call the strategy
+ *     - throw on rejection
+ *
+ *   Putting that flow in an aspect keeps endpoint code focused on business
+ *   logic while centralizing the enforcement policy in one place.
  */
 @Aspect
 @Component
@@ -43,19 +72,43 @@ public class RateLimitAspect {
     public Object enforce(ProceedingJoinPoint joinPoint, RateLimit rateLimit)
             throws Throwable {
 
+        // Step 1: Extract method metadata from the intercepted call.
+        // ProceedingJoinPoint is the generic AOP wrapper, but we need the
+        // MethodSignature to read the Java method and its declaring class.
         MethodSignature signature = (MethodSignature) joinPoint.getSignature();
         Method method = signature.getMethod();
         String className = signature.getDeclaringType().getSimpleName();
         String methodName = method.getName();
+
+        // Step 2: Resolve the current caller identity.
+        // The resolver decides whether this request is tracked by principal
+        // name, forwarded header, remote IP, or a fallback value.
         String clientId = clientIdentityResolver.resolveCurrentClientId();
 
+        // Step 3: Build a stable logical key for this endpoint + caller pair.
+        // Example:
+        //   DemoController.hello:principal:alice
+        //   DemoController.hello:ip:203.0.113.10
+        //
+        // This ensures each caller gets an independent quota for each
+        // annotated method instead of sharing one global counter.
         String key = className + "." + methodName + ":" + clientId;
+
+        // Step 4: Read the policy directly from the annotation instance that
+        // triggered this advice.
         int limit = rateLimit.limit();
         long windowMs = rateLimit.windowMs();
         String algorithm = rateLimit.algorithm();
 
+        // Step 5: Resolve the configured strategy and evaluate the request.
+        // The aspect does not know whether the algorithm is local, Redis-
+        // backed, fixed-window, token-bucket, etc. That choice is delegated
+        // to the strategy registry.
         RateLimitDecision decision = strategyRegistry.get(algorithm).evaluate(key, limit, windowMs);
 
+        // Step 6: Reject before the business method runs.
+        // Throwing here prevents the controller/service method from executing
+        // at all when the caller has exhausted its quota.
         if (!decision.isAllowed()) {
             throw new RateLimitExceededException(
                     key,
@@ -65,6 +118,8 @@ public class RateLimitAspect {
             );
         }
 
+        // Step 7: Continue to the original application logic only when the
+        // rate-limit check has passed.
         return joinPoint.proceed();
     }
 }
