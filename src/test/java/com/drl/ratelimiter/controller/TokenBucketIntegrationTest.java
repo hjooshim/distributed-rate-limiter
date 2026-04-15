@@ -20,6 +20,21 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+/**
+ * ============================================================
+ * INTEGRATION TESTS - Token-bucket HTTP flow
+ * ============================================================
+ *
+ * Fires MockMvc requests through the real Spring stack while Redis is provided
+ * by a testcontainer. These tests verify algorithm selection and bucket-key
+ * scoping at the HTTP layer.
+ *
+ * Coverage:
+ *   - TOKEN_BUCKET endpoints should populate the token-bucket Redis namespace
+ *   - different clients should not share buckets
+ *   - one client should still get separate buckets per endpoint
+ *   - trusted forwarded-header and remote-address identity paths should work
+ */
 @Testcontainers
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -35,6 +50,7 @@ class TokenBucketIntegrationTest {
 
     @DynamicPropertySource
     static void redisProperties(DynamicPropertyRegistry registry) {
+        // Wire the Spring Boot Redis client to the ephemeral testcontainer.
         registry.add("spring.data.redis.host", redis::getHost);
         registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
     }
@@ -47,10 +63,16 @@ class TokenBucketIntegrationTest {
 
     @AfterEach
     void clearRedis() {
+        // Clear shared Redis state between tests so each scenario starts with
+        // an empty token-bucket namespace.
         try (var connection = redisTemplate.getConnectionFactory().getConnection()) {
             connection.flushAll();
         }
     }
+
+    // ---------------------------------------------------------
+    // Algorithm selection
+    // ---------------------------------------------------------
 
     @Test
     @DisplayName("TOKEN_BUCKET should be selected when requested")
@@ -63,6 +85,10 @@ class TokenBucketIntegrationTest {
         assertThat(keys).isNotEmpty();
         assertThat(keys).allMatch(key -> key.startsWith("rate_limit:token_bucket:"));
     }
+
+    // ---------------------------------------------------------
+    // Bucket isolation
+    // ---------------------------------------------------------
 
     @Test
     @DisplayName("Different clients should not share the same bucket")
@@ -95,6 +121,10 @@ class TokenBucketIntegrationTest {
                         .header("X-Forwarded-For", "203.0.113.20"))
                 .andExpect(status().isOk());
     }
+
+    // ---------------------------------------------------------
+    // Identity resolution
+    // ---------------------------------------------------------
 
     @Test
     @DisplayName("Trusted forwarded header should use the first trimmed client value")

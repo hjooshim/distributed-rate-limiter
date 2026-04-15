@@ -4,7 +4,21 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * Configuration properties for client identity resolution in the rate-limiter path.
+ * ============================================================
+ * CONFIGURATION PROPERTIES - Client identity policy
+ * ============================================================
+ *
+ * This class exposes the configuration knobs that control how
+ * {@link ClientIdentityResolver} interprets caller identity.
+ *
+ * Two settings matter:
+ *   - trustForwardedHeader: whether forwarded headers may influence identity
+ *   - forwardedHeaderName: which header should be inspected when trust is on
+ *
+ * Keeping this policy in configuration allows the same application code to run
+ * safely in different environments:
+ *   - direct local development: trustForwardedHeader = false
+ *   - trusted reverse proxy / load balancer: trustForwardedHeader = true
  */
 @Component
 @ConfigurationProperties(prefix = "ratelimit.identity")

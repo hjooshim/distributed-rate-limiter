@@ -12,6 +12,15 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.web.servlet.MockMvc;
 
+/**
+ * ============================================================
+ * INTEGRATION TESTS - Backend failure handling
+ * ============================================================
+ *
+ * Boots the application with an intentionally unreachable Redis endpoint to
+ * verify fail-closed behavior for distributed strategies without breaking the
+ * local in-memory fixed-window flow.
+ */
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
@@ -28,9 +37,16 @@ class RateLimitBackendFailureIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
+    // ---------------------------------------------------------
+    // Distributed strategy should fail closed
+    // ---------------------------------------------------------
+
     @Test
     @DisplayName("TOKEN_BUCKET should fail closed with HTTP 503 when Redis is unavailable")
     void tokenBucketShouldReturn503WhenRedisIsUnavailable() throws Exception {
+        // The token-bucket endpoint depends on Redis. With Redis unavailable,
+        // the request should surface a structured 503 response instead of
+        // silently allowing traffic.
         mockMvc.perform(get("/api/token-bucket/primary")
                         .header("X-Forwarded-For", "203.0.113.30"))
                 .andExpect(status().isServiceUnavailable())
@@ -43,6 +59,10 @@ class RateLimitBackendFailureIntegrationTest {
                 ))
                 .andExpect(jsonPath("$.timestamp").exists());
     }
+
+    // ---------------------------------------------------------
+    // Local strategy should remain healthy
+    // ---------------------------------------------------------
 
     @Test
     @DisplayName("FIXED_WINDOW should still work when Redis is unavailable")

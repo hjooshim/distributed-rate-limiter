@@ -10,12 +10,29 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
+/**
+ * ============================================================
+ * UNIT TESTS - ClientIdentityResolver
+ * ============================================================
+ *
+ * Verifies the precedence rules used to build the caller identity that later
+ * becomes part of each rate-limit key.
+ *
+ * Resolution order under test:
+ *   principal -> trusted forwarded header -> remote address -> unknown-client
+ */
 class ClientIdentityResolverTest {
 
     @AfterEach
     void clearRequestContext() {
+        // RequestContextHolder is thread-local state. Reset it after each test
+        // so one synthetic request never leaks into the next one.
         RequestContextHolder.resetRequestAttributes();
     }
+
+    // ---------------------------------------------------------
+    // Principal precedence
+    // ---------------------------------------------------------
 
     @Test
     @DisplayName("Principal should be preferred over forwarded and remote addresses")
@@ -32,6 +49,10 @@ class ClientIdentityResolverTest {
 
         assertThat(resolver.resolveCurrentClientId()).isEqualTo("principal:alice");
     }
+
+    // ---------------------------------------------------------
+    // Forwarded-header trust
+    // ---------------------------------------------------------
 
     @Test
     @DisplayName("Forwarded header should be ignored unless trust is enabled")
@@ -61,6 +82,10 @@ class ClientIdentityResolverTest {
 
         assertThat(resolver.resolveCurrentClientId()).isEqualTo("ip:203.0.113.10");
     }
+
+    // ---------------------------------------------------------
+    // Last-resort fallback
+    // ---------------------------------------------------------
 
     @Test
     @DisplayName("Unknown client should be used only as a last resort")

@@ -4,16 +4,35 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.drl.ratelimiter.annotation.RateLimit;
 import com.drl.ratelimiter.controller.DemoController;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 
+/**
+ * ============================================================
+ * UNIT TESTS - StrategyRegistry startup validation
+ * ============================================================
+ *
+ * Uses ApplicationContextRunner to verify that strategy wiring fails fast
+ * when the application is misconfigured.
+ *
+ * Coverage:
+ *   - duplicate strategy names should stop startup
+ *   - unknown algorithm names in @RateLimit should stop startup
+ *   - valid FIXED_WINDOW / TOKEN_BUCKET combinations should start cleanly
+ */
 class StrategyRegistryValidationTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner();
 
+    // ---------------------------------------------------------
+    // Duplicate strategy-name validation
+    // ---------------------------------------------------------
+
     @Test
+    @DisplayName("Startup should fail when two strategies register the same name")
     void shouldFailStartupWhenStrategyNamesAreDuplicated() {
         contextRunner
                 .withUserConfiguration(StrategyRegistry.class, DuplicateStrategiesConfig.class)
@@ -24,7 +43,12 @@ class StrategyRegistryValidationTest {
                 });
     }
 
+    // ---------------------------------------------------------
+    // Unknown algorithm-name validation
+    // ---------------------------------------------------------
+
     @Test
+    @DisplayName("Startup should fail when @RateLimit references an unknown algorithm")
     void shouldFailStartupWhenRateLimitAnnotationReferencesUnknownAlgorithm() {
         contextRunner
                 .withUserConfiguration(
@@ -40,7 +64,12 @@ class StrategyRegistryValidationTest {
                 });
     }
 
+    // ---------------------------------------------------------
+    // Happy-path validation
+    // ---------------------------------------------------------
+
     @Test
+    @DisplayName("Startup should succeed when every referenced algorithm exists")
     void shouldAcceptExistingFixedWindowAndTokenBucketAlgorithms() {
         contextRunner
                 .withUserConfiguration(

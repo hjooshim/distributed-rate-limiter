@@ -20,6 +20,21 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+/**
+ * ============================================================
+ * UNIT TESTS - RedisTokenBucketStrategy
+ * ============================================================
+ *
+ * Exercises the Redis-backed token-bucket implementation against a real Redis
+ * container instead of mocking script execution.
+ *
+ * Coverage:
+ *   - allow / reject behavior while tokens remain or run out
+ *   - full and partial refill over time
+ *   - retry-after calculation when the bucket is empty
+ *   - bucket isolation by key and policy configuration
+ *   - concurrent correctness under contention
+ */
 @Testcontainers
 class RedisTokenBucketStrategyTest {
 
@@ -34,6 +49,8 @@ class RedisTokenBucketStrategyTest {
 
     @BeforeEach
     void setUp() {
+        // Build a real Redis client against the testcontainer so the Lua script
+        // and Redis-side atomicity are part of the test.
         RedisStandaloneConfiguration configuration = new RedisStandaloneConfiguration(
                 redis.getHost(),
                 redis.getMappedPort(6379)
@@ -49,6 +66,8 @@ class RedisTokenBucketStrategyTest {
 
     @AfterEach
     void tearDown() {
+        // Clear all Redis state between tests so bucket contents from one test
+        // never leak into the next one.
         if (redisTemplate != null) {
             try (var connection = redisTemplate.getConnectionFactory().getConnection()) {
                 connection.flushAll();
@@ -58,6 +77,10 @@ class RedisTokenBucketStrategyTest {
             connectionFactory.destroy();
         }
     }
+
+    // ---------------------------------------------------------
+    // Basic bucket behavior
+    // ---------------------------------------------------------
 
     @Test
     @DisplayName("Should allow requests while tokens remain")
@@ -77,6 +100,10 @@ class RedisTokenBucketStrategyTest {
         assertThat(strategy.isAllowed(key, 2, 1_000)).isTrue();
         assertThat(strategy.isAllowed(key, 2, 1_000)).isFalse();
     }
+
+    // ---------------------------------------------------------
+    // Refill and retry-after behavior
+    // ---------------------------------------------------------
 
     @Test
     @DisplayName("Should refill tokens after enough time passes")
@@ -116,11 +143,17 @@ class RedisTokenBucketStrategyTest {
 
         Thread.sleep(1_200);
 
+        // One token should have refilled after 1.2 seconds in a bucket that
+        // refills 2 tokens over 4 seconds.
         RateLimitDecision decision = strategy.evaluate(key, 2, 4_000);
 
         assertThat(decision.isAllowed()).isFalse();
         assertThat(decision.getRetryAfterSeconds()).isEqualTo(1L);
     }
+
+    // ---------------------------------------------------------
+    // Bucket isolation
+    // ---------------------------------------------------------
 
     @Test
     @DisplayName("Different keys should be independent")
@@ -152,6 +185,10 @@ class RedisTokenBucketStrategyTest {
         assertThat(strategy.getName()).isEqualTo("TOKEN_BUCKET");
     }
 
+    // ---------------------------------------------------------
+    // Concurrency
+    // ---------------------------------------------------------
+
     @Test
     @DisplayName("Concurrent requests should not exceed capacity")
     void concurrentRequestsShouldNotExceedCapacity() throws InterruptedException {
@@ -169,6 +206,8 @@ class RedisTokenBucketStrategyTest {
         for (int i = 0; i < threads; i++) {
             executor.submit(() -> {
                 try {
+                    // Hold all workers until they are ready, then release them
+                    // together to create meaningful contention on one bucket.
                     startLatch.await(5, TimeUnit.SECONDS);
                     if (strategy.isAllowed(key, capacity, windowMs)) {
                         allowed.incrementAndGet();

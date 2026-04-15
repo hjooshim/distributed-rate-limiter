@@ -22,6 +22,18 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+/**
+ * ============================================================
+ * INTEGRATION TESTS - Distributed token-bucket behavior
+ * ============================================================
+ *
+ * Starts two independent Spring application contexts against one shared Redis
+ * container to verify that token-bucket state is truly distributed.
+ *
+ * Coverage:
+ *   - two app nodes should share one quota for the same client
+ *   - endpoint isolation must still hold across different nodes
+ */
 @Testcontainers
 class DistributedTokenBucketIntegrationTest {
 
@@ -34,6 +46,8 @@ class DistributedTokenBucketIntegrationTest {
 
     @AfterEach
     void clearRedis() {
+        // Clear Redis between tests so state created by one pair of app nodes
+        // never affects the next scenario.
         LettuceConnectionFactory connectionFactory = new LettuceConnectionFactory(
                 new RedisStandaloneConfiguration(redis.getHost(), redis.getMappedPort(6379))
         );
@@ -45,6 +59,10 @@ class DistributedTokenBucketIntegrationTest {
             connectionFactory.destroy();
         }
     }
+
+    // ---------------------------------------------------------
+    // Shared quota across nodes
+    // ---------------------------------------------------------
 
     @Test
     @DisplayName("Two app nodes should share the same token-bucket quota for one client")
@@ -60,6 +78,10 @@ class DistributedTokenBucketIntegrationTest {
             assertThat(second.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         }
     }
+
+    // ---------------------------------------------------------
+    // Endpoint isolation across nodes
+    // ---------------------------------------------------------
 
     @Test
     @DisplayName("Endpoint isolation should still hold when requests hit different app nodes")
@@ -77,6 +99,8 @@ class DistributedTokenBucketIntegrationTest {
     }
 
     private ConfigurableApplicationContext startNode(String nodeName) {
+        // Each context behaves like a separate application node, but both point
+        // to the same Redis backend so bucket state is shared.
         return new SpringApplicationBuilder(RateLimiterApplication.class)
                 .properties(
                         "server.port=0",
@@ -93,6 +117,8 @@ class DistributedTokenBucketIntegrationTest {
             String path,
             String clientIp
     ) {
+        // Trusting X-Forwarded-For in these tests lets us simulate one logical
+        // client consistently across multiple app nodes.
         HttpHeaders headers = new HttpHeaders();
         headers.add("X-Forwarded-For", clientIp);
 

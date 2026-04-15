@@ -8,11 +8,29 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 /**
- * Resolves the current client identity used in rate-limit keys.
+ * ============================================================
+ * IDENTITY RESOLUTION - Build the caller portion of rate-limit keys
+ * ============================================================
  *
- * <p>The resolver prefers authenticated principals, optionally trusts a configured forwarded
- * header, falls back to the remote IP address, and uses {@code unknown-client} only when no
- * request-bound identity is available.
+ * This class decides "who is the client?" for the entire rate-limiter path.
+ * The returned value becomes part of the logical rate-limit key, so the
+ * precedence rules here directly determine which requests share quota.
+ *
+ * Resolution order:
+ *   1. authenticated principal
+ *   2. trusted forwarded header value
+ *   3. remote IP address
+ *   4. unknown-client fallback
+ *
+ * Why prefixes matter:
+ *   A principal and an IP address might have the same raw text, but they
+ *   should never collide in the same bucket. Prefixes like principal:alice
+ *   and ip:203.0.113.10 keep those namespaces separate.
+ *
+ * Security note:
+ *   Forwarded headers are optional because they should be trusted only when
+ *   the application sits behind infrastructure that sanitizes or controls
+ *   those headers. Otherwise, a client could spoof its own identity.
  */
 @Component
 public class ClientIdentityResolver {
@@ -33,21 +51,26 @@ public class ClientIdentityResolver {
     }
 
     /**
-     * Resolves the current client id for the active request context.
+     * Resolves the client id for the active HTTP request context.
      *
      * @return namespaced client id such as {@code principal:alice} or {@code ip:203.0.113.10}
      */
     public String resolveCurrentClientId() {
+        // If this code runs outside an HTTP request (for example in a unit
+        // test or background thread), there is no request-bound identity.
         RequestAttributes requestAttributes = RequestContextHolder.getRequestAttributes();
         if (!(requestAttributes instanceof ServletRequestAttributes servletRequestAttributes)) {
             return UNKNOWN_CLIENT;
         }
 
+        // First preference: authenticated user identity.
         String principalId = principalIdentity(servletRequestAttributes.getRequest().getUserPrincipal());
         if (principalId != null) {
             return principalId;
         }
 
+        // Second preference: forwarded identity, but only when configuration
+        // explicitly says that header can be trusted.
         String forwardedIdentity = forwardedIdentity(
                 servletRequestAttributes.getRequest().getHeader(properties.getForwardedHeaderName())
         );
@@ -55,11 +78,14 @@ public class ClientIdentityResolver {
             return forwardedIdentity;
         }
 
+        // Third preference: direct remote address from the current request.
         String remoteIdentity = ipIdentity(servletRequestAttributes.getRequest().getRemoteAddr());
         if (remoteIdentity != null) {
             return remoteIdentity;
         }
 
+        // Last resort: keep the key non-null and deterministic even when no
+        // caller identity can be resolved at all.
         return UNKNOWN_CLIENT;
     }
 
@@ -75,6 +101,8 @@ public class ClientIdentityResolver {
     }
 
     private String forwardedIdentity(String forwardedHeader) {
+        // Only trust forwarded headers when the deployment environment is
+        // known to sanitize them correctly.
         if (!properties.isTrustForwardedHeader()) {
             return null;
         }
@@ -99,6 +127,8 @@ public class ClientIdentityResolver {
             return null;
         }
 
+        // X-Forwarded-For is typically a comma-separated chain.
+        // The left-most value represents the original client.
         return Arrays.stream(forwardedFor.split(","))
                 .map(String::trim)
                 .filter(value -> !value.isBlank())
