@@ -3,7 +3,6 @@ package com.drl.ratelimiter.strategy;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.springframework.stereotype.Component;
 
 /**
@@ -74,9 +73,5 @@ public class StrategyRegistry {
 
     public boolean contains(String name) {
         return strategies.containsKey(name);
-    }
-
-    public Set<String> names() {
-        return strategies.keySet();
     }
 }
