@@ -1,17 +1,20 @@
 package com.drl.ratelimiter.aspect;
 
-import com.drl.ratelimiter.annotation.RateLimit;
-import com.drl.ratelimiter.exception.RateLimitExceededException;
-import com.drl.ratelimiter.identity.ClientIdentityResolver;
-import com.drl.ratelimiter.strategy.RateLimitDecision;
-import com.drl.ratelimiter.strategy.StrategyRegistry;
+import java.lang.reflect.Method;
+
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.stereotype.Component;
 
-import java.lang.reflect.Method;
+import com.drl.ratelimiter.annotation.RateLimit;
+import com.drl.ratelimiter.exception.RateLimitExceededException;
+import com.drl.ratelimiter.identity.ClientIdentityResolver;
+import com.drl.ratelimiter.strategy.RateLimitDecision;
+import com.drl.ratelimiter.strategy.StrategyRegistry;
+
+import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * ============================================================
@@ -51,13 +54,16 @@ public class RateLimitAspect {
 
     private final StrategyRegistry strategyRegistry;
     private final ClientIdentityResolver clientIdentityResolver;
+    private final MeterRegistry meterRegistry;
 
     public RateLimitAspect(
             StrategyRegistry strategyRegistry,
-            ClientIdentityResolver clientIdentityResolver
+            ClientIdentityResolver clientIdentityResolver,
+            MeterRegistry meterRegistry
     ) {
         this.strategyRegistry = strategyRegistry;
         this.clientIdentityResolver = clientIdentityResolver;
+        this.meterRegistry = meterRegistry;
     }
 
     /**
@@ -106,7 +112,17 @@ public class RateLimitAspect {
         // to the strategy registry.
         RateLimitDecision decision = strategyRegistry.get(algorithm).evaluate(key, limit, windowMs);
 
-        // Step 6: Reject before the business method runs.
+        // Step 6: Record the decision as a labeled counter.
+        // Tags are intentionally low-cardinality: endpoint and algorithm are
+        // bounded by the number of annotated methods in the codebase, and
+        // result has exactly two values (allowed / rejected).
+        meterRegistry.counter("rate_limit_decisions_total",
+                "endpoint",  className + "." + methodName,
+                "algorithm", algorithm,
+                "result",    decision.isAllowed() ? "allowed" : "rejected"
+        ).increment();
+
+        // Step 7: Reject before the business method runs.
         // Throwing here prevents the controller/service method from executing
         // at all when the caller has exhausted its quota.
         if (!decision.isAllowed()) {
@@ -118,7 +134,7 @@ public class RateLimitAspect {
             );
         }
 
-        // Step 7: Continue to the original application logic only when the
+        // Step 8: Continue to the original application logic only when the
         // rate-limit check has passed.
         return joinPoint.proceed();
     }
