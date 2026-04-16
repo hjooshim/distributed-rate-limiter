@@ -1,3 +1,21 @@
 spring:
   application:
     name: distributed-rate-limiter
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  otlp:
+    metrics:
+      export:
+        # prometheus metrics are pushed to Grafana Cloud via OTLP
+        url: ${GRAFANA_OTLP_ENDPOINT}/v1/metrics
+        headers:
+          authorization: "Basic ${GRAFANA_OTLP_TOKEN}"
+        step: 30s
+  metrics:
+    enable:
+      logback: false
+      tomcat: false
