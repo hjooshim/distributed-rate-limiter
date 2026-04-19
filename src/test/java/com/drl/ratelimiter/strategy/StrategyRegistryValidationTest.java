@@ -122,6 +122,11 @@ class StrategyRegistryValidationTest {
         }
 
         @Bean
+        RateLimitStrategy slidingWindowStrategy() {
+            return new NamedStrategy("SLIDING_WINDOW");
+        }
+
+        @Bean
         DemoController demoController() {
             return new DemoController();
         }

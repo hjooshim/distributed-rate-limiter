@@ -76,6 +76,36 @@ public class DemoController {
     }
 
     /**
+     * Endpoint backed by the sliding-window strategy for client-aware coverage.
+     *
+     * @return response body for the sliding-window primary demo endpoint
+     */
+    @RateLimit(limit = 3, windowMs = 10_000, algorithm = "SLIDING_WINDOW")
+    @GetMapping("/sliding-window/primary")
+    public Map<String, Object> slidingWindowPrimaryEndpoint() {
+        return Map.of(
+                "message", "Sliding window primary endpoint",
+                "limit", "3 per 10 seconds",
+                "timestamp", Instant.now().toString()
+        );
+    }
+
+    /**
+     * Second sliding-window endpoint used to prove per-endpoint isolation.
+     *
+     * @return response body for the sliding-window secondary demo endpoint
+     */
+    @RateLimit(limit = 3, windowMs = 10_000, algorithm = "SLIDING_WINDOW")
+    @GetMapping("/sliding-window/secondary")
+    public Map<String, Object> slidingWindowSecondaryEndpoint() {
+        return Map.of(
+                "message", "Sliding window secondary endpoint",
+                "limit", "3 per 10 seconds",
+                "timestamp", Instant.now().toString()
+        );
+    }
+
+    /**
      * Endpoint without any rate-limit annotation.
      *
      * @return response body for the free endpoint
