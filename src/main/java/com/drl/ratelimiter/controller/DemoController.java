@@ -65,9 +65,9 @@ public class DemoController {
      *
      * @return response body for the second token-bucket demo endpoint
      */
-    @RateLimit(limit = 1, windowMs = 60_000, algorithm = "TOKEN_BUCKET")
-    @GetMapping("/token-bucket/secondary")
-    public Map<String, Object> tokenBucketSecondaryEndpoint() {
+    @RateLimit(limit = 5, windowMs = 10_000, algorithm = "TOKEN_BUCKET")
+    @GetMapping("/token-bucket/demo")
+    public Map<String, Object> tokenBucketDemoEndpoint() {
         return Map.of(
                 "message", "Token bucket secondary endpoint",
                 "limit", "1 per minute",

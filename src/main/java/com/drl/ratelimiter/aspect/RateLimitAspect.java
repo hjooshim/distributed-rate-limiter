@@ -1,20 +1,20 @@
 package com.drl.ratelimiter.aspect;
 
-import java.lang.reflect.Method;
-
-import org.aspectj.lang.ProceedingJoinPoint;
-import org.aspectj.lang.annotation.Around;
-import org.aspectj.lang.annotation.Aspect;
-import org.aspectj.lang.reflect.MethodSignature;
-import org.springframework.stereotype.Component;
-
 import com.drl.ratelimiter.annotation.RateLimit;
 import com.drl.ratelimiter.exception.RateLimitExceededException;
 import com.drl.ratelimiter.identity.ClientIdentityResolver;
 import com.drl.ratelimiter.strategy.RateLimitDecision;
 import com.drl.ratelimiter.strategy.StrategyRegistry;
-
 import io.micrometer.core.instrument.MeterRegistry;
+import org.aspectj.lang.ProceedingJoinPoint;
+import org.aspectj.lang.annotation.Around;
+import org.aspectj.lang.annotation.Aspect;
+import org.aspectj.lang.reflect.MethodSignature;
+import org.springframework.stereotype.Component;
+import io.micrometer.core.instrument.Tag;
+import io.micrometer.core.instrument.Tags;
+
+import java.lang.reflect.Method;
 
 /**
  * ============================================================
@@ -117,9 +117,11 @@ public class RateLimitAspect {
         // bounded by the number of annotated methods in the codebase, and
         // result has exactly two values (allowed / rejected).
         meterRegistry.counter("rate_limit_decisions_total",
-                "endpoint",  className + "." + methodName,
-                "algorithm", algorithm,
-                "result",    decision.isAllowed() ? "allowed" : "rejected"
+            Tags.of(
+                Tag.of("endpoint",  className + "." + methodName),
+                Tag.of("algorithm", algorithm),
+                Tag.of("result",    decision.isAllowed() ? "allowed" : "rejected")
+            )
         ).increment();
 
         // Step 7: Reject before the business method runs.
