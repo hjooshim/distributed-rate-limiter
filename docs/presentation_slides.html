@@ -1,0 +1,1726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Distributed Rate Limiting — QuotaGuard</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --blue-50:#EFF6FF;--blue-100:#DBEAFE;--blue-200:#BFDBFE;--blue-300:#93C5FD;
+    --blue-400:#60A5FA;--blue-500:#3B82F6;--blue-600:#2563EB;--blue-700:#1D4ED8;--blue-800:#1E40AF;
+    --slate-50:#F8FAFC;--slate-100:#F1F5F9;--slate-200:#E2E8F0;--slate-300:#CBD5E1;
+    --slate-400:#94A3B8;--slate-500:#64748B;--slate-600:#475569;--slate-700:#334155;
+    --slate-800:#1E293B;--slate-900:#0F172A;
+    --green-500:#22C55E;--green-600:#16A34A;--red-500:#EF4444;--red-600:#DC2626;--amber-500:#F59E0B;
+    --radius:16px;
+  }
+  *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:var(--slate-50);font-family:'DM Sans',sans-serif;color:var(--slate-800);-webkit-font-smoothing:antialiased}
+  .deck{position:relative;width:100%;height:100%}
+
+  .slide{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 80px;opacity:0;pointer-events:none;will-change:opacity,transform;transform:translateX(50px)}
+  .slide.entering{transition:opacity .45s ease,transform .45s ease}
+  .slide.active{opacity:1;pointer-events:auto;transform:translateX(0)}
+  .slide.exiting{transition:opacity .3s ease,transform .3s ease}
+  .slide .anim{opacity:0;transform:translateY(24px);transition:opacity .55s cubic-bezier(.22,1,.36,1),transform .55s cubic-bezier(.22,1,.36,1)}
+  .slide.active .anim.visible{opacity:1;transform:translateY(0)}
+
+  .slide-num{position:absolute;top:36px;left:56px;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--blue-500);letter-spacing:.06em;background:var(--blue-50);border:1.5px solid var(--blue-200);padding:4px 14px;border-radius:20px}
+  h1{font-family:'Outfit',sans-serif;font-weight:800;font-size:clamp(38px,4vw,56px);line-height:1.15;color:var(--slate-900);margin-bottom:20px;letter-spacing:-.02em}
+  h1 .accent{color:var(--blue-600)}
+  h2{font-family:'Outfit',sans-serif;font-weight:700;font-size:clamp(30px,3vw,44px);line-height:1.2;color:var(--slate-900);margin-bottom:16px;letter-spacing:-.015em}
+  h2 .accent{color:var(--blue-600)}
+  .subtitle{font-size:clamp(16px,1.4vw,20px);color:var(--slate-500);line-height:1.7;max-width:720px;text-align:center}
+
+  /* Slide 1 */
+  .cards{display:flex;gap:24px;margin-top:40px;flex-wrap:wrap;justify-content:center}
+  .card{background:#fff;border:1.5px solid var(--slate-200);border-radius:var(--radius);padding:28px 28px 24px;width:260px;transition:border-color .25s,box-shadow .25s,transform .25s;cursor:default}
+  .card:hover{border-color:var(--blue-300);box-shadow:0 8px 30px rgba(37,99,235,.1);transform:translateY(-4px)}
+  .card-icon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:16px;font-size:22px}
+  .card-icon.shield{background:#DBEAFE;color:var(--blue-600)}
+  .card-icon.traffic{background:#FEF3C7;color:var(--amber-500)}
+  .card-icon.tier{background:#D1FAE5;color:var(--green-600)}
+  .card h3{font-family:'Outfit',sans-serif;font-weight:600;font-size:17px;color:var(--slate-800);margin-bottom:8px}
+  .card p{font-size:14px;line-height:1.6;color:var(--slate-500)}
+
+  /* ── Slide 2 Phases ── */
+  .phase-container{position:relative;width:100%;flex:1;display:flex;align-items:center;justify-content:center}
+  .phase{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .35s ease}
+  .phase.active{opacity:1;pointer-events:auto}
+  .step-indicator{position:absolute;top:36px;right:56px;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;color:var(--slate-400);letter-spacing:.05em}
+
+  .phase-title{font-family:'Outfit',sans-serif;font-weight:700;font-size:clamp(24px,2.5vw,34px);color:var(--slate-900);margin-bottom:6px;text-align:center}
+  .phase-title .accent{color:var(--blue-600)}
+  .phase-title .red{color:var(--red-600)}
+  .phase-title .green{color:var(--green-600)}
+  .phase-subtitle{font-size:clamp(14px,1.3vw,17px);color:var(--slate-500);line-height:1.7;max-width:650px;text-align:center;margin-bottom:24px}
+  .scene-svg{width:100%;max-width:900px;height:auto;display:block}
+
+  /* Counter pulse: scale in place */
+  @keyframes heartbeat{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
+  .hb{animation:heartbeat 2s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+
+  /* Dash flow */
+  @keyframes dashFlow{0%{stroke-dashoffset:20}100%{stroke-dashoffset:0}}
+  .dash-animate{animation:dashFlow 1s linear infinite}
+
+  /* Redis glow */
+  @keyframes glowPulse{0%,100%{filter:drop-shadow(0 0 4px rgba(216,44,32,.15))}50%{filter:drop-shadow(0 0 14px rgba(216,44,32,.4))}}
+  .redis-glow{animation:glowPulse 2s ease-in-out infinite}
+
+  /* Warning border pulse */
+  @keyframes borderPulse{0%,100%{stroke:#FCA5A5}50%{stroke:#EF4444}}
+
+  /* ── Slide 3 ── */
+  .arch-wrapper{width:100%;max-width:1050px;margin-top:16px}
+  .arch-svg-full{width:100%;height:auto;display:block}
+
+  /* ── Nav ── */
+  .nav-bar{position:fixed;bottom:0;left:0;right:0;height:64px;display:flex;align-items:center;justify-content:center;gap:20px;background:rgba(255,255,255,.85);backdrop-filter:blur(12px);border-top:1px solid var(--slate-200);z-index:100}
+  .nav-btn{width:44px;height:44px;border-radius:12px;border:1.5px solid var(--slate-200);background:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--slate-500);font-size:20px;transition:border-color .2s,color .2s,background .2s}
+  .nav-btn:hover{border-color:var(--blue-400);color:var(--blue-600);background:var(--blue-50)}
+  .nav-btn:disabled{opacity:.35;cursor:default;pointer-events:none}
+  .dots{display:flex;gap:8px}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--slate-200);cursor:pointer;transition:background .25s,transform .25s}
+  .dot.active{background:var(--blue-500);transform:scale(1.25)}
+  .progress-track{position:fixed;top:0;left:0;right:0;height:3px;background:var(--slate-100);z-index:100}
+  .progress-fill{height:100%;background:linear-gradient(90deg,var(--blue-500),var(--blue-400));transition:width .4s ease}
+  .bg-circle{position:fixed;border-radius:50%;pointer-events:none;z-index:-1;opacity:.35}
+  .bg-circle-1{width:500px;height:500px;top:-180px;right:-120px;background:radial-gradient(circle,var(--blue-100) 0%,transparent 70%)}
+  .bg-circle-2{width:400px;height:400px;bottom:-100px;left:-80px;background:radial-gradient(circle,var(--blue-50) 0%,transparent 70%)}
+
+  /* ── Slide 1 Use-Case Cards ── */
+  .keywords{display:flex;gap:14px;margin-top:20px;flex-wrap:wrap;justify-content:center}
+  .kw{font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:600;padding:8px 18px;border-radius:24px;letter-spacing:.02em}
+  .kw.k1{background:#DBEAFE;color:#1E40AF} .kw.k2{background:#FEF3C7;color:#92400E} .kw.k3{background:#D1FAE5;color:#15803D}
+
+  .uc-cards{display:flex;gap:28px;justify-content:center;margin-top:12px}
+  .uc-card{width:300px;background:#fff;border:2px solid var(--slate-200);border-radius:18px;overflow:hidden;padding:0;transition:opacity .4s,transform .4s,border-color .4s,box-shadow .4s;opacity:.25;transform:scale(.94)}
+  .uc-card.on{opacity:1;transform:scale(1);border-color:var(--blue-400);box-shadow:0 8px 32px rgba(37,99,235,.12)}
+  .uc-card-scene{height:220px;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative}
+  .uc-card-body{padding:16px 20px 20px;text-align:center}
+  .uc-card-body h3{font-family:'Outfit',sans-serif;font-weight:700;font-size:18px;color:var(--slate-800);margin-bottom:4px}
+  .uc-card-body p{font-size:13px;color:var(--slate-500);line-height:1.5}
+
+  /* Bot spam scroll */
+  .spam-track{display:flex;flex-direction:column;gap:6px;position:absolute;left:14px;right:14px}
+  @keyframes spamScroll{0%{transform:translateY(60px)}100%{transform:translateY(-280px)}}
+  .spam-track.running{animation:spamScroll 3s linear infinite}
+  .spam-line{display:flex;align-items:center;gap:6px;background:#FEF2F2;border-radius:8px;padding:6px 10px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#991B1B;white-space:nowrap}
+
+  /* Traffic spike chart */
+  @keyframes drawSpike{0%{stroke-dashoffset:600}100%{stroke-dashoffset:0}}
+  .spike-line{stroke-dasharray:600;stroke-dashoffset:600}
+  .spike-line.running{animation:drawSpike 2.5s ease forwards}
+
+  /* Quota bars */
+  @keyframes fillBasic{0%{width:0;background:#3B82F6}60%{width:60%;background:#3B82F6}85%{width:90%;background:#F59E0B}100%{width:100%;background:#EF4444}}
+  @keyframes fillPremium{0%{width:0}100%{width:55%;background:#22C55E}}
+  .bar-basic,.bar-premium{height:28px;border-radius:6px;width:0}
+  .bar-basic.running{animation:fillBasic 3s ease-in-out forwards}
+  .bar-premium.running{animation:fillPremium 3s ease-in-out forwards}
+
+  @media(max-width:900px){
+    .slide{padding:50px 24px 80px}
+    .cards{flex-direction:column;align-items:center}
+    .arch-wrapper{transform:scale(.55);transform-origin:top center}
+    .slide-num{left:24px;top:20px}
+    .step-indicator{right:24px;top:20px}
+  }
+
+  /* ── OOP shared animations ── */
+  @keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes svgFade{from{opacity:0}to{opacity:1}}
+
+  /* ── OOP algo cards (Phase 0 of Abstraction slide) ── */
+  .oop-algo-card{opacity:0;animation:fadeUp .45s ease forwards;animation-delay:var(--delay,0s)}
+  .oop-algo-top{border:2px solid;border-radius:14px;padding:20px 22px;width:210px;text-align:center}
+  .oop-tag{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;padding:3px 10px;border-radius:12px;display:inline-block;margin-bottom:10px}
+  .oop-algo-name{font-family:'Outfit',sans-serif;font-weight:700;font-size:18px;margin-bottom:6px}
+  .oop-algo-sub{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--slate-500)}
+
+  /* ── OOP code block ── */
+  .oop-code-block{background:#0F172A;border-radius:14px;padding:22px 26px;font-family:'JetBrains Mono',monospace;font-size:13.5px;line-height:1.85;width:100%}
+  .oop-code-comment{color:#475569;margin-bottom:2px}
+  .oop-code-line{opacity:0;animation:fadeUp .35s ease forwards;animation-delay:var(--d,0s)}
+  .oop-code-badge{margin-top:14px;padding:9px 14px;border-radius:8px;font-size:12px;font-weight:700;opacity:0;animation:fadeUp .35s ease forwards;animation-delay:var(--d,0s)}
+  .oop-code-badge.green{background:#1A2E22;color:#6EE7B7}
+  .oop-code-badge.red{background:#2D1515;color:#FCA5A5}
+
+  /* code token colours */
+  .ct-blue{color:#60A5FA}.ct-white{color:#F8FAFC}.ct-green{color:#34D399}
+  .ct-yellow{color:#FBBF24}.ct-red{color:#F87171}.ct-dim{color:#475569}
+
+  /* inline highlight chips inside code */
+  .hl-green{background:#1E3A2F;border-radius:4px;padding:1px 7px;color:#6EE7B7;font-weight:700}
+  .hl-yellow{background:#312E20;border-radius:4px;padding:1px 7px;color:#FCD34D;font-weight:700}
+  .hl-red{background:#2D1515;border-radius:4px;padding:1px 6px;color:#FCA5A5;font-size:11px}
+
+  /* inline code in subtitles */
+  .ic{font-family:'JetBrains Mono',monospace;background:var(--blue-50);padding:1px 7px;border-radius:5px;font-size:.88em;color:var(--blue-700)}
+
+  /* ── OOP pills (abstraction summary) ── */
+  .oop-pill{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;padding:11px 24px;border-radius:24px;border:2px solid;opacity:0;animation:fadeUp .4s ease forwards;animation-delay:var(--d,0s)}
+
+  /* ── OOP badge (inheritance closing) ── */
+  .oop-badge{display:inline-block;padding:9px 22px;border-radius:12px;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700}
+  .oop-badge.green{background:#D1FAE5;border:1.5px solid #6EE7B7;color:#065F46}
+
+  /* ── Encapsulation requirement cards ── */
+  .oop-req-card{background:#fff;border:2px solid var(--slate-200);border-radius:16px;padding:22px 20px;width:210px;text-align:center}
+  .oop-req-title{font-family:'Outfit',sans-serif;font-weight:700;font-size:16px;margin-bottom:6px}
+  .oop-req-body{font-size:13px;color:var(--slate-500);line-height:1.5}
+
+  /* ── Annotation side cards in code walkthrough ── */
+  .oop-annot{border-radius:14px;padding:14px 16px;border:1.5px solid}
+  .oop-annot.green{background:#D1FAE5;border-color:#6EE7B7}
+  .oop-annot.blue{background:#DBEAFE;border-color:#93C5FD}
+  .oop-annot.yellow{background:#FEF3C7;border-color:#FCD34D}
+  .oop-annot.red{background:#FEE2E2;border-color:#FCA5A5}
+  .oop-annot-title{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;margin-bottom:6px}
+  .oop-annot.green .oop-annot-title{color:#065F46}
+  .oop-annot.green .oop-annot-body{color:#047857}
+  .oop-annot.blue .oop-annot-title{color:#1E40AF}
+  .oop-annot.blue .oop-annot-body{color:#1D4ED8}
+  .oop-annot.yellow .oop-annot-title{color:#92400E}
+  .oop-annot.yellow .oop-annot-body{color:#B45309}
+  .oop-annot.red .oop-annot-title{color:#991B1B}
+  .oop-annot.red .oop-annot-body{color:#B91C1C}
+  .oop-annot-body{font-size:13px;line-height:1.5}
+
+  /* ── OOP closing summary rows ── */
+  .oop-summary-row{display:flex;align-items:center;gap:14px;background:var(--bg);border:1.5px solid var(--border);border-radius:14px;padding:16px 18px}
+  .oop-summary-icon{font-size:22px;flex-shrink:0}
+  .oop-summary-principle{font-family:'Outfit',sans-serif;font-weight:700;font-size:15px}
+  .oop-summary-desc{font-size:13px;color:var(--slate-500)}
+</style>
+</head>
+<body>
+<div class="bg-circle bg-circle-1"></div>
+<div class="bg-circle bg-circle-2"></div>
+<div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+
+<div class="deck">
+
+<!-- ════ INTRO ════ -->
+<section class="slide active" data-slide="0">
+  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px">
+    <div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;color:var(--blue-500);background:var(--blue-50);border:1.5px solid var(--blue-200);padding:6px 18px;border-radius:24px;letter-spacing:.06em;margin-bottom:8px">CS 5004 · Final Project</div>
+    <h1 style="font-size:clamp(48px,5.5vw,72px);text-align:center;letter-spacing:-.03em;line-height:1.1">Distributed<br><span class="accent">Rate Limiter</span></h1>
+    <div style="width:60px;height:3px;background:linear-gradient(90deg,var(--blue-500),var(--blue-300));border-radius:2px;margin:12px 0"></div>
+    <div style="font-family:'DM Sans',sans-serif;font-size:clamp(17px,1.5vw,22px);color:var(--slate-600);font-weight:500;letter-spacing:.01em">Hyunjoo Shim &nbsp;·&nbsp; Yuting Ning</div>
+  </div>
+</section>
+
+<!-- ════ SLIDE 1 (4 phases) ════ -->
+<section class="slide" data-slide="1" data-phases="4">
+
+  <div class="phase-container">
+
+    <!-- Phase 0: Title + Keywords -->
+    <div class="phase active" data-phase="0">
+      <h1 style="text-align:center">What is <span class="accent">Rate Limiting</span>?</h1>
+      <div class="keywords">
+        <span class="kw k1">🛡 Prevent Abuse</span>
+        <span class="kw k2">🚦 Protect Servers</span>
+        <span class="kw k3">👥 Ensure Fair Usage</span>
+      </div>
+      <p class="subtitle" style="margin-top:20px;font-size:clamp(14px,1.2vw,17px)">Control how many requests a client can make within a timeframe.</p>
+    </div>
+
+    <!-- Phases 1-3: Cards (one div, stays visible for phases 1-3) -->
+    <div class="phase" data-phase="1" data-phase-end="3">
+      <h2 style="text-align:center;margin-bottom:4px">Real-World <span class="accent">Use Cases</span></h2>
+      <div class="uc-cards" id="ucCards" data-active-card="1">
+
+        <!-- Card 1: Bot Protection -->
+        <div class="uc-card on" data-card="1">
+          <div class="uc-card-scene" style="background:#FFF1F2">
+            <!-- PC Monitor -->
+            <svg viewBox="0 0 240 180" width="230" style="filter:drop-shadow(0 2px 8px rgba(0,0,0,.08))">
+              <!-- Monitor body -->
+              <rect x="10" y="5" width="220" height="140" rx="10" fill="white" stroke="#CBD5E1" stroke-width="2"/>
+              <!-- Screen -->
+              <rect x="16" y="11" width="208" height="122" rx="4" fill="#FFF5F5"/>
+              <!-- Stand -->
+              <rect x="95" y="145" width="50" height="12" rx="2" fill="#CBD5E1"/>
+              <rect x="75" y="157" width="90" height="8" rx="4" fill="#E2E8F0"/>
+              <!-- Webcam dot -->
+              <circle cx="120" cy="8" r="2.5" fill="#E2E8F0"/>
+              <!-- Comment lines (scrolling) -->
+              <clipPath id="monitorClip"><rect x="16" y="11" width="208" height="122" rx="4"/></clipPath>
+              <g clip-path="url(#monitorClip)">
+                <foreignObject x="20" y="14" width="200" height="260">
+                  <div xmlns="http://www.w3.org/1999/xhtml" class="spam-track" id="spamInner" style="text-align:left">
+                    <div class="spam-line" style="font-size:11px;padding:5px 8px">🤖 Buy now!!! Limited offer</div>
+                    <div class="spam-line" style="font-size:11px;padding:5px 8px">🤖 FREE gift card here!!!</div>
+                    <div class="spam-line" style="font-size:11px;padding:5px 8px">🤖 Click to win $1000</div>
+                    <div class="spam-line" style="font-size:11px;padding:5px 8px">🤖 You won a prize!!!</div>
+                    <div class="spam-line" style="font-size:11px;padding:5px 8px">🤖 Act fast! Don't miss!</div>
+                    <div class="spam-line" style="font-size:11px;padding:5px 8px">🤖 Subscribe for coins</div>
+                    <div class="spam-line" style="font-size:11px;padding:5px 8px">🤖 Discount code FREE</div>
+                    <div class="spam-line" style="font-size:11px;padding:5px 8px">🤖 Buy now!! Sale ends!</div>
+                    <div class="spam-line" style="font-size:11px;padding:5px 8px">🤖 FREE iPhone giveaway</div>
+                    <div class="spam-line" style="font-size:11px;padding:5px 8px">🤖 Click here NOW!!!</div>
+                    <div class="spam-line" style="font-size:11px;padding:5px 8px">🤖 You've been selected!</div>
+                    <div class="spam-line" style="font-size:11px;padding:5px 8px">🤖 Claim your reward</div>
+                  </div>
+                </foreignObject>
+              </g>
+            </svg>
+          </div>
+          <div class="uc-card-body">
+            <h3>🛡 Bot Protection</h3>
+            <p>Block malicious bots from<br>flooding your service</p>
+          </div>
+        </div>
+
+        <!-- Card 2: Traffic Control -->
+        <div class="uc-card" data-card="2">
+          <div class="uc-card-scene" style="background:#FFFBEB">
+            <svg viewBox="0 0 220 160" width="210">
+              <!-- Axes -->
+              <line x1="30" y1="10" x2="30" y2="135" stroke="#CBD5E1" stroke-width="1.5"/>
+              <line x1="30" y1="135" x2="210" y2="135" stroke="#CBD5E1" stroke-width="1.5"/>
+              <text x="14" y="14" font-family="JetBrains Mono" font-size="7" fill="#94A3B8">req/s</text>
+              <text x="200" y="148" font-family="JetBrains Mono" font-size="7" fill="#94A3B8">time</text>
+              <!-- Rate limit line -->
+              <line x1="30" y1="50" x2="210" y2="50" stroke="#EF4444" stroke-width="1.5" stroke-dasharray="4 3"/>
+              <text x="212" y="53" font-family="JetBrains Mono" font-size="7" font-weight="700" fill="#EF4444">LIMIT</text>
+              <!-- Traffic line (animated) -->
+              <polyline class="spike-line" id="spikeLine" points="30,110 55,105 80,100 100,95 115,85 125,50 132,20 140,15 150,25 158,45 170,90 185,100 200,105" stroke="#3B82F6" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+              <!-- Blocked zone -->
+              <rect x="118" y="10" width="40" height="40" rx="4" fill="#FEF2F2" opacity=".6" stroke="#FCA5A5" stroke-width="1" stroke-dasharray="3 2"/>
+              <text x="138" y="35" text-anchor="middle" font-family="JetBrains Mono" font-size="7" font-weight="700" fill="#DC2626">BLOCKED</text>
+            </svg>
+          </div>
+          <div class="uc-card-body">
+            <h3>🚦 Traffic Control</h3>
+            <p>Smooth traffic spikes for<br>stable resource usage</p>
+          </div>
+        </div>
+
+        <!-- Card 3: Tiered Access -->
+        <div class="uc-card" data-card="3">
+          <div class="uc-card-scene" style="background:#F0FDF4;padding:24px 20px;flex-direction:column;gap:18px">
+            <!-- Basic tier -->
+            <div style="width:100%">
+              <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+                <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#64748B">Basic Tier</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#94A3B8">100 req/min</span>
+              </div>
+              <div style="width:100%;height:28px;background:#E2E8F0;border-radius:6px;overflow:hidden;position:relative">
+                <div class="bar-basic" id="barBasic" style="height:100%;border-radius:6px;background:#3B82F6"></div>
+                <span id="blockedLabel" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:800;color:white;opacity:0;text-shadow:0 1px 2px rgba(0,0,0,.3)">BLOCKED</span>
+              </div>
+            </div>
+            <!-- Premium tier -->
+            <div style="width:100%">
+              <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+                <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#7C3AED">Premium Tier</span>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#94A3B8">10,000 req/min</span>
+              </div>
+              <div style="width:100%;height:28px;background:#E2E8F0;border-radius:6px;overflow:hidden">
+                <div class="bar-premium" id="barPremium" style="height:100%;border-radius:6px;background:#22C55E"></div>
+              </div>
+            </div>
+          </div>
+          <div class="uc-card-body">
+            <h3>👥 Tiered Access</h3>
+            <p>Different quotas for<br>different service tiers</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ════ SLIDE 2 (3 phases) ════ -->
+<section class="slide" data-slide="2" data-phases="3">
+
+  <div class="phase-container">
+
+    <!-- PHASE 1 -->
+    <div class="phase active" data-phase="0">
+      <div class="phase-title">Single Server — <span class="accent">It Just Works</span></div>
+      <div class="phase-subtitle">One server sees every request.<br>The counter is always accurate, so the limit is enforced correctly.</div>
+      <svg class="scene-svg" viewBox="0 0 750 310" xmlns="http://www.w3.org/2000/svg">
+        <defs><marker id="p1a" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8Z" fill="#94A3B8"/></marker></defs>
+
+        <!-- Client -->
+        <rect x="65" y="45" width="160" height="100" rx="14" fill="#EDE9FE" stroke="#C4B5FD" stroke-width="2"/>
+        <text x="145" y="87" text-anchor="middle" font-family="DM Sans" font-size="20" font-weight="700" fill="#5B21B6">Client</text>
+        <text x="145" y="115" text-anchor="middle" font-family="JetBrains Mono" font-size="14" font-weight="700" fill="#7C3AED">sends requests</text>
+
+        <!-- Arrow (extended) -->
+        <line x1="225" y1="95" x2="440" y2="95" stroke="#CBD5E1" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#p1a)"/>
+
+        <!-- Flowing dots -->
+        <circle r="7" opacity="0" fill="#3B82F6"><animateMotion dur="2.5s" repeatCount="indefinite" path="M265,95 L440,95" keyTimes="0;1" calcMode="spline" keySplines="0.4 0 0.2 1"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.8;1" dur="2.5s" repeatCount="indefinite"/></circle>
+        <circle r="7" opacity="0" fill="#3B82F6"><animateMotion dur="2.5s" repeatCount="indefinite" path="M265,95 L440,95" begin="0.8s" keyTimes="0;1" calcMode="spline" keySplines="0.4 0 0.2 1"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.8;1" dur="2.5s" repeatCount="indefinite" begin="0.8s"/></circle>
+        <!-- Rejected dot (starts blue, turns red at server) -->
+        <circle r="7" opacity="0" fill="#3B82F6"><animateMotion dur="3.5s" repeatCount="indefinite" path="M265,95 L420,95 L265,95 L225,95" begin="2s" keyTimes="0;0.4;0.7;1" calcMode="spline" keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/><animate attributeName="opacity" values="0;1;1;1;0" keyTimes="0;0.1;0.4;0.8;1" dur="3.5s" repeatCount="indefinite" begin="2s"/><animate attributeName="fill" values="#3B82F6;#3B82F6;#EF4444;#EF4444;#EF4444" keyTimes="0;0.38;0.4;0.7;1" dur="3.5s" repeatCount="indefinite" begin="2s"/></circle>
+
+        <!-- Server -->
+        <rect x="450" y="25" width="210" height="140" rx="14" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+        <text x="555" y="73" text-anchor="middle" font-family="DM Sans" font-size="20" font-weight="700" fill="#1E40AF">Server</text>
+        <text x="555" y="100" text-anchor="middle" font-family="JetBrains Mono" font-size="14" font-weight="700" fill="#1E40AF">rate limiter</text>
+        <!-- Counter badge (red, heartbeat in place) -->
+        <g class="hb"><rect x="505" y="115" width="100" height="34" rx="17" fill="#DC2626"/><text x="555" y="138" text-anchor="middle" font-family="JetBrains Mono" font-size="16" font-weight="700" fill="white">51 / 50</text></g>
+
+        <!-- Result below (centered, wider) -->
+        <rect x="130" y="222" width="460" height="56" rx="14" fill="#F0FDF4" stroke="#86EFAC" stroke-width="2"/>
+        <text x="360" y="257" text-anchor="middle" font-family="JetBrains Mono" font-size="17" font-weight="700" fill="#16A34A">✅  One counter — correctly limited</text>
+      </svg>
+    </div>
+
+    <!-- PHASE 2 -->
+    <div class="phase" data-phase="1">
+      <div class="phase-title">Multiple Servers — <span class="red">The Problem</span></div>
+      <div class="phase-subtitle">Requests scatter across instances.<br>Each keeps its own counter — no server sees the full picture.</div>
+      <svg class="scene-svg" viewBox="0 0 700 480" xmlns="http://www.w3.org/2000/svg">
+        <defs><marker id="p2a" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8Z" fill="#94A3B8"/></marker></defs>
+
+        <!-- Client -->
+        <rect x="30" y="120" width="145" height="95" rx="14" fill="#EDE9FE" stroke="#C4B5FD" stroke-width="2"/>
+        <text x="102" y="160" text-anchor="middle" font-family="DM Sans" font-size="19" font-weight="700" fill="#5B21B6">Client</text>
+        <text x="102" y="185" text-anchor="middle" font-family="JetBrains Mono" font-size="13" font-weight="700" fill="#7C3AED">sends requests</text>
+
+        <!-- Load Balancer -->
+        <g transform="translate(250,138)"><polygon points="45,0 90,30 45,60 0,30" fill="#FEF3C7" stroke="#FBBF24" stroke-width="2.5"/><text x="45" y="26" text-anchor="middle" font-family="JetBrains Mono" font-size="12" font-weight="700" fill="#92400E">Load</text><text x="45" y="41" text-anchor="middle" font-family="JetBrains Mono" font-size="12" font-weight="700" fill="#92400E">Balancer</text></g>
+
+        <!-- Arrows (extended) -->
+        <line x1="175" y1="168" x2="250" y2="168" stroke="#CBD5E1" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#p2a)"/>
+        <line x1="340" y1="148" x2="430" y2="57" stroke="#CBD5E1" stroke-width="2" stroke-dasharray="8 5" marker-end="url(#p2a)"/>
+        <line x1="340" y1="168" x2="430" y2="168" stroke="#CBD5E1" stroke-width="2" stroke-dasharray="8 5" marker-end="url(#p2a)"/>
+        <line x1="340" y1="188" x2="430" y2="285" stroke="#CBD5E1" stroke-width="2" stroke-dasharray="8 5" marker-end="url(#p2a)"/>
+
+        <!-- Scatter dots -->
+        <circle r="6" opacity="0" fill="#3B82F6"><animateMotion dur="2s" repeatCount="indefinite" path="M250,168 L430,57"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.8;1" dur="2s" repeatCount="indefinite"/></circle>
+        <circle r="6" opacity="0" fill="#3B82F6"><animateMotion dur="2s" repeatCount="indefinite" path="M250,168 L430,168" begin="0.6s"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.8;1" dur="2s" repeatCount="indefinite" begin="0.6s"/></circle>
+        <circle r="6" opacity="0" fill="#3B82F6"><animateMotion dur="2s" repeatCount="indefinite" path="M250,168 L430,285" begin="1.2s"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.8;1" dur="2s" repeatCount="indefinite" begin="1.2s"/></circle>
+        <!-- Leaked dot -->
+        <circle r="6" opacity="0" fill="#22C55E"><animateMotion dur="3s" repeatCount="indefinite" path="M250,168 L430,168 L590,168" begin="1.8s" keyTimes="0;0.5;1" calcMode="spline" keySplines="0.4 0 0.2 1;0.4 0 0.2 1"/><animate attributeName="opacity" values="0;1;1;1;0" keyTimes="0;0.1;0.5;0.9;1" dur="3s" repeatCount="indefinite" begin="1.8s"/></circle>
+
+        <!-- Server 1 -->
+        <rect x="435" y="15" width="170" height="85" rx="12" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+        <text x="520" y="45" text-anchor="middle" font-family="DM Sans" font-size="17" font-weight="700" fill="#1E40AF">Server 1</text>
+        <rect x="480" y="60" width="80" height="28" rx="14" fill="#1E40AF"/><text x="520" y="80" text-anchor="middle" font-family="JetBrains Mono" font-size="14" font-weight="700" fill="white">16 / 50</text>
+
+        <!-- Server 2 -->
+        <rect x="435" y="125" width="170" height="85" rx="12" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+        <text x="520" y="158" text-anchor="middle" font-family="DM Sans" font-size="17" font-weight="700" fill="#1E40AF">Server 2</text>
+        <rect x="480" y="173" width="80" height="28" rx="14" fill="#1E40AF"/><text x="520" y="193" text-anchor="middle" font-family="JetBrains Mono" font-size="14" font-weight="700" fill="white">18 / 50</text>
+
+        <!-- Server 3 -->
+        <rect x="435" y="240" width="170" height="85" rx="12" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+        <text x="520" y="270" text-anchor="middle" font-family="DM Sans" font-size="17" font-weight="700" fill="#1E40AF">Server 3</text>
+        <rect x="480" y="285" width="80" height="28" rx="14" fill="#1E40AF"/><text x="520" y="305" text-anchor="middle" font-family="JetBrains Mono" font-size="14" font-weight="700" fill="white">17 / 50</text>
+
+        <!-- Combined warning below (heartbeat) -->
+        <g class="hb">
+        <rect x="140" y="382" width="400" height="62" rx="14" fill="#FEF2F2" stroke="#FCA5A5" stroke-width="2">
+          <animate attributeName="stroke" values="#FCA5A5;#EF4444;#FCA5A5" dur="2s" repeatCount="indefinite"/>
+        </rect>
+        <text x="340" y="407" text-anchor="middle" font-family="JetBrains Mono" font-size="12" font-weight="700" fill="#DC2626">⚠️  Real total: <tspan font-size="15" font-weight="800">51 / 50</tspan> — LIMIT EXCEEDED</text>
+        <text x="340" y="425" text-anchor="middle" font-family="JetBrains Mono" font-size="10" font-weight="600" fill="#92400E">Request leaked — <tspan font-weight="800" fill="#DC2626">should have been blocked!</tspan></text>
+        </g>
+      </svg>
+    </div>
+
+    <!-- PHASE 3 -->
+    <div class="phase" data-phase="2">
+      <div class="phase-title">Distributed Rate Limiter — <span class="green">The Solution</span></div>
+      <div class="phase-subtitle">A shared Redis store keeps the global counter.<br>Every instance checks the same state — limits are enforced consistently.</div>
+      <svg class="scene-svg" viewBox="0 0 900 470" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="p3a" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8Z" fill="#94A3B8"/></marker>
+          <marker id="p3g" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8Z" fill="#22C55E"/></marker>
+          <marker id="p3r" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8Z" fill="#D82C20"/></marker>
+        </defs>
+
+        <!-- Client -->
+        <rect x="15" y="125" width="145" height="95" rx="14" fill="#EDE9FE" stroke="#C4B5FD" stroke-width="2"/>
+        <text x="87" y="165" text-anchor="middle" font-family="DM Sans" font-size="19" font-weight="700" fill="#5B21B6">Client</text>
+        <text x="87" y="190" text-anchor="middle" font-family="JetBrains Mono" font-size="13" font-weight="700" fill="#7C3AED">sends requests</text>
+
+        <!-- Load Balancer -->
+        <g transform="translate(240,143)"><polygon points="45,0 90,30 45,60 0,30" fill="#FEF3C7" stroke="#FBBF24" stroke-width="2.5"/><text x="45" y="26" text-anchor="middle" font-family="JetBrains Mono" font-size="12" font-weight="700" fill="#92400E">Load</text><text x="45" y="41" text-anchor="middle" font-family="JetBrains Mono" font-size="12" font-weight="700" fill="#92400E">Balancer</text></g>
+
+        <!-- Arrows Client→LB (longer) -->
+        <line x1="160" y1="173" x2="240" y2="173" stroke="#CBD5E1" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#p3a)"/>
+        <!-- LB→Servers (longer) -->
+        <line x1="330" y1="153" x2="440" y2="60" stroke="#CBD5E1" stroke-width="2" stroke-dasharray="8 5" marker-end="url(#p3a)"/>
+        <line x1="330" y1="173" x2="440" y2="173" stroke="#CBD5E1" stroke-width="2" stroke-dasharray="8 5" marker-end="url(#p3a)"/>
+        <line x1="330" y1="193" x2="440" y2="290" stroke="#CBD5E1" stroke-width="2" stroke-dasharray="8 5" marker-end="url(#p3a)"/>
+
+        <!-- Blue scatter dots (following arrow paths: LB→Server→Redis) -->
+        <circle r="5" opacity="0" fill="#3B82F6"><animateMotion dur="3.2s" repeatCount="indefinite" path="M330,153 L445,60 L605,57 L695,130" keyTimes="0;0.3;0.6;1" calcMode="spline" keySplines="0.4 0 0.2 1;0.3 0 0.2 1;0.4 0 0.2 1"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.06;0.85;1" dur="3.2s" repeatCount="indefinite"/></circle>
+        <circle r="5" opacity="0" fill="#3B82F6"><animateMotion dur="3.2s" repeatCount="indefinite" path="M330,173 L445,173 L605,173 L695,173" begin="0.8s" keyTimes="0;0.3;0.6;1" calcMode="spline" keySplines="0.4 0 0.2 1;0.3 0 0.2 1;0.4 0 0.2 1"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.06;0.85;1" dur="3.2s" repeatCount="indefinite" begin="0.8s"/></circle>
+        <circle r="5" opacity="0" fill="#3B82F6"><animateMotion dur="3.2s" repeatCount="indefinite" path="M330,193 L445,290 L605,290 L695,215" begin="1.6s" keyTimes="0;0.3;0.6;1" calcMode="spline" keySplines="0.4 0 0.2 1;0.3 0 0.2 1;0.4 0 0.2 1"/><animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.06;0.85;1" dur="3.2s" repeatCount="indefinite" begin="1.6s"/></circle>
+
+        <!-- Red bounce dot: delayed, follows arrow path LB→Server2→Redis→back→Client -->
+        <circle r="7" opacity="0" fill="#3B82F6">
+          <animateMotion dur="5.5s" repeatCount="indefinite" begin="3s" path="M330,173 L525,173 L695,173 L525,173 L285,173 L87,173" keyTimes="0;0.15;0.32;0.50;0.72;1" calcMode="spline" keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+          <animate attributeName="opacity" values="0;1;1;1;1;1;0" keyTimes="0;0.04;0.15;0.32;0.50;0.9;1" dur="5.5s" repeatCount="indefinite" begin="3s"/>
+          <animate attributeName="fill" values="#3B82F6;#3B82F6;#EF4444;#EF4444;#EF4444;#EF4444" keyTimes="0;0.315;0.32;0.50;0.72;1" dur="5.5s" repeatCount="indefinite" begin="3s"/>
+        </circle>
+
+        <!-- Server 1 -->
+        <rect x="445" y="15" width="160" height="85" rx="12" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+        <text x="525" y="48" text-anchor="middle" font-family="DM Sans" font-size="17" font-weight="700" fill="#1E40AF">Server 1</text>
+        <text x="525" y="75" text-anchor="middle" font-family="JetBrains Mono" font-size="13" font-weight="700" fill="#1E40AF">checks Redis  ↘</text>
+
+        <!-- Server 2 -->
+        <rect x="445" y="130" width="160" height="85" rx="12" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+        <text x="525" y="165" text-anchor="middle" font-family="DM Sans" font-size="17" font-weight="700" fill="#1E40AF">Server 2</text>
+        <text x="525" y="192" text-anchor="middle" font-family="JetBrains Mono" font-size="13" font-weight="700" fill="#1E40AF">checks Redis  →</text>
+
+        <!-- Server 3 -->
+        <rect x="445" y="248" width="160" height="85" rx="12" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+        <text x="525" y="281" text-anchor="middle" font-family="DM Sans" font-size="17" font-weight="700" fill="#1E40AF">Server 3</text>
+        <text x="525" y="308" text-anchor="middle" font-family="JetBrains Mono" font-size="13" font-weight="700" fill="#1E40AF">checks Redis  ↗</text>
+
+        <!-- Dashed Servers → Redis (longer, with gap) -->
+        <line x1="605" y1="57" x2="695" y2="130" stroke="#D82C20" stroke-width="2.5" stroke-dasharray="8 5" class="dash-animate" marker-end="url(#p3r)"/>
+        <line x1="605" y1="173" x2="695" y2="173" stroke="#D82C20" stroke-width="2.5" stroke-dasharray="8 5" class="dash-animate" marker-end="url(#p3r)"/>
+        <line x1="605" y1="290" x2="695" y2="215" stroke="#D82C20" stroke-width="2.5" stroke-dasharray="8 5" class="dash-animate" marker-end="url(#p3r)"/>
+
+        <!-- Redis cylinder (red #D82C20, shifted right) -->
+        <g class="redis-glow">
+          <ellipse cx="780" cy="115" rx="68" ry="24" fill="#FECACA" stroke="#D82C20" stroke-width="2.5"/>
+          <rect x="712" y="115" width="136" height="100" fill="#FEE2E2"/>
+          <line x1="712" y1="115" x2="712" y2="215" stroke="#D82C20" stroke-width="2.5"/>
+          <line x1="848" y1="115" x2="848" y2="215" stroke="#D82C20" stroke-width="2.5"/>
+          <ellipse cx="780" cy="215" rx="68" ry="24" fill="#FEE2E2" stroke="#D82C20" stroke-width="2.5"/>
+          <ellipse cx="780" cy="115" rx="68" ry="24" fill="#FECACA" stroke="#D82C20" stroke-width="2.5"/>
+          <text x="780" y="160" text-anchor="middle" font-family="DM Sans" font-size="21" font-weight="700" fill="#D82C20">Redis</text>
+          <text x="780" y="187" text-anchor="middle" font-family="JetBrains Mono" font-size="14" font-weight="700" fill="#D82C20">shared state</text>
+        </g>
+
+        <!-- Counter badge (red, heartbeat in place) -->
+        <g class="hb"><rect x="730" y="252" width="100" height="34" rx="17" fill="#DC2626"/><text x="780" y="275" text-anchor="middle" font-family="JetBrains Mono" font-size="16" font-weight="700" fill="white">51 / 50</text></g>
+
+        <!-- Combined result below (centered) -->
+        <rect x="150" y="390" width="520" height="65" rx="16" fill="#F0FDF4" stroke="#86EFAC" stroke-width="2"/>
+        <text x="410" y="415" text-anchor="middle" font-family="JetBrains Mono" font-size="16" font-weight="700" fill="#16A34A">✅  Correctly blocked — 429 returned</text>
+        <text x="410" y="437" text-anchor="middle" font-family="JetBrains Mono" font-size="13" font-weight="600" fill="#15803D" opacity=".8">Consistent enforcement across all servers</text>
+      </svg>
+    </div>
+
+  </div>
+</section>
+
+<!-- ════ SLIDE 3 ════ -->
+<section class="slide" data-slide="3">
+  <h2 class="anim" data-delay="0" style="margin-bottom:8px;">System <span class="accent">Architecture</span></h2>
+  <div class="arch-wrapper anim" data-delay="180">
+    <svg class="arch-svg-full" viewBox="0 0 1500 920" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="ah" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8Z" fill="#475569"/></marker>
+        <marker id="ah-r" markerWidth="10" markerHeight="8" refX="1" refY="4" orient="auto"><path d="M10,0 L0,4 L10,8Z" fill="#475569"/></marker>
+      </defs>
+
+      <!-- Spring Boot App box (taller to include 200 response) -->
+      <rect x="300" y="50" width="870" height="820" rx="14" fill="#FFFDE7" stroke="#E5D76A" stroke-width="2.5"/>
+      <text x="500" y="88" text-anchor="middle" font-family="JetBrains Mono" font-size="24" font-weight="700" fill="#475569">Spring Boot App</text>
+
+      <!-- Rate Limit Strategies sub-box (more space from title) -->
+      <rect x="700" y="120" width="440" height="490" rx="10" fill="none" stroke="#E5D76A" stroke-width="2"/>
+      <rect x="760" y="106" width="230" height="28" rx="4" fill="#FFFDE7"/>
+      <text x="875" y="126" text-anchor="middle" font-family="JetBrains Mono" font-size="19" font-weight="700" fill="#475569">Rate Limit Strategies</text>
+
+      <!-- Fixed Window -->
+      <rect x="760" y="155" width="320" height="95" rx="8" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+      <text x="920" y="193" text-anchor="middle" font-family="DM Sans" font-size="24" font-weight="700" fill="#1E40AF">Fixed Window</text>
+      <text x="920" y="222" text-anchor="middle" font-family="JetBrains Mono" font-size="19" font-weight="600" fill="#1E40AF" opacity=".85">in-memory</text>
+
+      <!-- Token Bucket -->
+      <rect x="760" y="285" width="320" height="95" rx="8" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+      <text x="920" y="323" text-anchor="middle" font-family="DM Sans" font-size="24" font-weight="700" fill="#1E40AF">Token Bucket</text>
+      <text x="920" y="352" text-anchor="middle" font-family="JetBrains Mono" font-size="19" font-weight="600" fill="#1E40AF" opacity=".85">Redis Hash + Lua</text>
+
+      <!-- Sliding Window -->
+      <rect x="760" y="415" width="320" height="95" rx="8" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+      <text x="920" y="453" text-anchor="middle" font-family="DM Sans" font-size="24" font-weight="700" fill="#1E40AF">Sliding Window</text>
+      <text x="920" y="482" text-anchor="middle" font-family="JetBrains Mono" font-size="19" font-weight="600" fill="#1E40AF" opacity=".85">Redis Sorted Set + Lua</text>
+
+      <!-- @RateLimit AOP (bigger, moved left for longer arrows) -->
+      <rect x="330" y="365" width="290" height="115" rx="10" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+      <text x="475" y="412" text-anchor="middle" font-family="DM Sans" font-size="24" font-weight="700" fill="#1E40AF">@RateLimit AOP</text>
+      <text x="475" y="442" text-anchor="middle" font-family="JetBrains Mono" font-size="18" font-weight="600" fill="#1E40AF" opacity=".85">Intercepts every request</text>
+
+      <!-- Business Logic (moved down for gap) -->
+      <rect x="740" y="700" width="380" height="115" rx="10" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+      <text x="930" y="745" text-anchor="middle" font-family="DM Sans" font-size="24" font-weight="700" fill="#1E40AF">Business Logic</text>
+      <text x="930" y="778" text-anchor="middle" font-family="JetBrains Mono" font-size="18" font-weight="600" fill="#1E40AF" opacity=".85">/api/strict · /api/normal</text>
+
+      <!-- Client (moved left) -->
+      <ellipse cx="65" cy="580" rx="60" ry="38" fill="#E8DEF8" stroke="#B39DDB" stroke-width="2"/>
+      <text x="65" y="587" text-anchor="middle" font-family="DM Sans" font-size="22" font-weight="700" fill="#5B21B6">Client</text>
+
+      <!-- Redis (#D82C20, larger) -->
+      <ellipse cx="1380" cy="340" rx="70" ry="26" fill="#FECACA" stroke="#D82C20" stroke-width="2.5"/>
+      <rect x="1310" y="340" width="140" height="110" fill="#FEE2E2"/>
+      <line x1="1310" y1="340" x2="1310" y2="450" stroke="#D82C20" stroke-width="2.5"/>
+      <line x1="1450" y1="340" x2="1450" y2="450" stroke="#D82C20" stroke-width="2.5"/>
+      <ellipse cx="1380" cy="450" rx="70" ry="26" fill="#FEE2E2" stroke="#D82C20" stroke-width="2.5"/>
+      <ellipse cx="1380" cy="340" rx="70" ry="26" fill="#FECACA" stroke="#D82C20" stroke-width="2.5"/>
+      <text x="1380" y="390" text-anchor="middle" font-family="DM Sans" font-size="27" font-weight="700" fill="#D82C20">Redis</text>
+      <text x="1380" y="418" text-anchor="middle" font-family="JetBrains Mono" font-size="18" font-weight="700" fill="#D82C20">shared state</text>
+
+      <!-- ════ ARROWS ════ -->
+
+      <!-- HTTP request: Client → AOP (arrowhead visible before AOP box) -->
+      <path d="M 115 555 C 180 400, 230 220, 325 370" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+      <rect x="120" y="310" width="168" height="34" rx="5" fill="white" stroke="#CBD5E1" stroke-width="1"/><text x="204" y="333" text-anchor="middle" font-family="JetBrains Mono" font-size="19" font-weight="600" fill="#475569">HTTP request</text>
+
+      <!-- AOP → Fixed Window (label centered mid-arrow) -->
+      <path d="M 620 385 C 655 290, 700 210, 760 200" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+      <rect x="628" y="268" width="115" height="32" rx="5" fill="white" stroke="#CBD5E1" stroke-width="1"/><text x="685" y="290" text-anchor="middle" font-family="JetBrains Mono" font-size="19" font-weight="600" fill="#475569">evaluate</text>
+
+      <!-- AOP → Token Bucket (label centered mid-arrow) -->
+      <path d="M 620 420 C 665 400, 715 370, 760 345" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+      <rect x="638" y="380" width="115" height="32" rx="5" fill="white" stroke="#CBD5E1" stroke-width="1"/><text x="695" y="401" text-anchor="middle" font-family="JetBrains Mono" font-size="19" font-weight="600" fill="#475569">evaluate</text>
+
+      <!-- AOP → Sliding Window (label centered mid-arrow) -->
+      <path d="M 620 460 C 655 478, 715 490, 760 472" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+      <rect x="620" y="480" width="115" height="32" rx="5" fill="white" stroke="#CBD5E1" stroke-width="1"/><text x="677" y="501" text-anchor="middle" font-family="JetBrains Mono" font-size="19" font-weight="600" fill="#475569">evaluate</text>
+
+      <!-- TB ↔ Redis (label centered on arrow) -->
+      <path d="M 1080 332 C 1180 332, 1270 350, 1310 370" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#ah)" marker-start="url(#ah-r)"/>
+      <rect x="1120" y="322" width="155" height="32" rx="5" fill="white" stroke="#CBD5E1" stroke-width="1"/><text x="1197" y="344" text-anchor="middle" font-family="JetBrains Mono" font-size="18" font-weight="600" fill="#475569">atomic script</text>
+
+      <!-- SW ↔ Redis (label centered on arrow) -->
+      <path d="M 1080 463 C 1180 463, 1270 450, 1310 440" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#ah)" marker-start="url(#ah-r)"/>
+      <rect x="1120" y="450" width="155" height="32" rx="5" fill="white" stroke="#CBD5E1" stroke-width="1"/><text x="1197" y="472" text-anchor="middle" font-family="JetBrains Mono" font-size="18" font-weight="600" fill="#475569">atomic script</text>
+
+      <!-- AOP → Business Logic (allowed, below strategies box) -->
+      <path d="M 510 480 C 550 600, 660 680, 735 740" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+      <rect x="530" y="640" width="240" height="34" rx="5" fill="white" stroke="#86EFAC" stroke-width="1.5"/><text x="650" y="663" text-anchor="middle" font-family="JetBrains Mono" font-size="19" font-weight="600" fill="#16A34A">✅ allowed — proceed</text>
+
+      <!-- 429 rejected label (clearly ABOVE, with space) -->
+      <rect x="40" y="458" width="245" height="58" rx="8" fill="white" stroke="#FCA5A5" stroke-width="2.5"/>
+      <text x="162" y="485" text-anchor="middle" font-family="JetBrains Mono" font-size="20" font-weight="700" fill="#DC2626">❌ 429 rejected</text>
+      <text x="162" y="506" text-anchor="middle" font-family="JetBrains Mono" font-size="17" font-weight="600" fill="#DC2626">+ Retry-After</text>
+      <!-- AOP → Client (429 arrow, curves LOW below the box) -->
+      <path d="M 330 475 C 270 560, 170 610, 125 588" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+
+      <!-- 200 response: BizLogic → Client (starts from left edge of box) -->
+      <path d="M 740 790 C 480 830, 220 810, 100 618" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#ah)"/>
+      <rect x="380" y="810" width="210" height="34" rx="5" fill="white" stroke="#86EFAC" stroke-width="1.5"/><text x="485" y="833" text-anchor="middle" font-family="JetBrains Mono" font-size="19" font-weight="600" fill="#16A34A">✅ 200 response</text>
+    </svg>
+  </div>
+</section>
+
+<!-- ════ LIVE DEMO ════ -->
+<section class="slide" data-slide="4">
+  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px">
+    <h1 style="font-size:clamp(48px,6vw,72px);text-align:center;letter-spacing:-.03em">Live Demo <span style="font-size:.9em">✨</span></h1>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════
+     OOP SECTION
+     Slide 5  — Abstraction        (4 phases)
+     Slide 6  — Inheritance        (3 phases)
+     Slide 7  — Polymorphism       (2 phases)
+     Slide 8  — Encapsulation req  (1 phase)
+     Slide 9  — Encapsulation code (3 phases: L1 → L2 → L3)
+     Slide 10 — Closing line
+════════════════════════════════════════════════ -->
+
+<!-- ════ SLIDE 5 · ABSTRACTION + INHERITANCE DIAGRAM (3 phases) ════ -->
+<section class="slide" data-slide="5" data-phases="2">
+  <div class="step-indicator"></div>
+  <div class="phase-container">
+
+    <!-- ── Phase 0: three algorithms + the question ── -->
+    <div class="phase active" data-phase="0">
+      <div class="slide-num">OOP · Abstraction</div>
+      <div class="phase-title">We started with a <span class="accent">simple requirement</span></div>
+      <div class="phase-subtitle">Different rate limiters for different scenarios — how do we make the rest of the system <em>not care</em> about these differences?</div>
+      <div style="display:flex;gap:22px;margin-top:8px;justify-content:center">
+        <div class="oop-algo-card" style="--delay:0.05s">
+          <div class="oop-algo-top" style="background:#EFF6FF;border-color:#93C5FD">
+            <span class="oop-tag" style="background:#DBEAFE;color:#1E40AF">Local</span>
+            <div class="oop-algo-name" style="color:#1E40AF">Fixed Window</div>
+            <div class="oop-algo-sub">ConcurrentHashMap · in-memory</div>
+          </div>
+        </div>
+        <div class="oop-algo-card" style="--delay:0.15s">
+          <div class="oop-algo-top" style="background:#FEF2F2;border-color:#FCA5A5">
+            <span class="oop-tag" style="background:#FEE2E2;color:#DC2626">Redis</span>
+            <div class="oop-algo-name" style="color:#DC2626">Token Bucket</div>
+            <div class="oop-algo-sub">Redis Hash · Lua script</div>
+          </div>
+        </div>
+        <div class="oop-algo-card" style="--delay:0.25s">
+          <div class="oop-algo-top" style="background:#FEF2F2;border-color:#FCA5A5">
+            <span class="oop-tag" style="background:#FEE2E2;color:#DC2626">Redis</span>
+            <div class="oop-algo-name" style="color:#DC2626">Sliding Window</div>
+            <div class="oop-algo-sub">Redis Sorted Set · Lua script</div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:28px;padding:12px 28px;background:#FEF3C7;border:1.5px solid #FBBF24;border-radius:12px;font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#92400E;opacity:0;animation:fadeUp .5s .55s forwards">
+        How does the caller talk to all three?
+      </div>
+    </div>
+
+    <!-- ── Phase 1: Interface diagram (Abstraction) → grows into Inheritance step 1 on next → ── -->
+    <div class="phase" data-phase="1">
+      <div class="slide-num" id="diagramSlideNum">OOP · Abstraction</div>
+      <div class="phase-title" id="diagramTitle">Introduce a common <span class="accent">interface</span></div>
+      <div class="phase-subtitle" id="diagramSubtitle" style="margin-bottom:8px">Caller only talks to the interface — not to any specific implementation. Keep pressing → to grow the diagram.</div>
+
+      <div style="width:100%;max-width:780px">
+        <!--
+          viewBox grows from 780×290 → 780×390 (abstract layer) → 780×490 (Redis layer)
+          We drive this with a JS class on the SVG element.
+        -->
+        <svg id="treeSvg"
+             viewBox="0 0 780 360"
+             width="100%"
+             xmlns="http://www.w3.org/2000/svg"
+             style="overflow:visible;transition:viewBox 0.6s ease">
+          <defs>
+            <marker id="mk-blue" markerWidth="13" markerHeight="11" refX="1" refY="5.5" orient="auto">
+              <path d="M12,0 L12,11 L0,5.5Z" fill="none" stroke="#3B82F6" stroke-width="2"/>
+            </marker>
+            <marker id="mk-green" markerWidth="13" markerHeight="11" refX="1" refY="5.5" orient="auto">
+              <path d="M12,0 L12,11 L0,5.5Z" fill="none" stroke="#34D399" stroke-width="2"/>
+            </marker>
+            <marker id="mk-amber" markerWidth="13" markerHeight="11" refX="1" refY="5.5" orient="auto">
+              <path d="M12,0 L12,11 L0,5.5Z" fill="none" stroke="#FBBF24" stroke-width="2"/>
+            </marker>
+          </defs>
+
+          <!-- ══ Interface box — always visible ══ -->
+          <rect x="220" y="10" width="340" height="78" rx="12" fill="#EFF6FF" stroke="#3B82F6" stroke-width="2.5" stroke-dasharray="8 4"/>
+          <text x="390" y="34" text-anchor="middle" font-family="JetBrains Mono" font-size="12" font-weight="700" fill="#3B82F6">«interface»</text>
+          <text x="390" y="57" text-anchor="middle" font-family="Outfit" font-size="20" font-weight="800" fill="#1E40AF">RateLimitStrategy</text>
+          <text x="390" y="76" text-anchor="middle" font-family="JetBrains Mono" font-size="12" fill="#3B82F6">evaluate(key, limit, windowMs)</text>
+
+          <!-- ══ Blue lines interface → 3 leaves (step 1 only) ══ -->
+          <g id="linesBlue" style="transition:opacity .4s ease">
+            <line x1="110" y1="260" x2="110" y2="148" stroke="#3B82F6" stroke-width="1.8"/>
+            <line x1="110" y1="148" x2="310" y2="88" stroke="#3B82F6" stroke-width="1.8" marker-end="url(#mk-blue)"/>
+            <line x1="390" y1="260" x2="390" y2="88" stroke="#3B82F6" stroke-width="1.8" marker-end="url(#mk-blue)"/>
+            <line x1="670" y1="260" x2="670" y2="148" stroke="#3B82F6" stroke-width="1.8"/>
+            <line x1="670" y1="148" x2="470" y2="88" stroke="#3B82F6" stroke-width="1.8" marker-end="url(#mk-blue)"/>
+          </g>
+
+          <!-- ══ Three leaf boxes — always visible ══ -->
+          <rect x="20" y="260" width="180" height="80" rx="10" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+          <text x="110" y="294" text-anchor="middle" font-family="DM Sans" font-size="14" font-weight="700" fill="#1E40AF">LocalFixed</text>
+          <text x="110" y="313" text-anchor="middle" font-family="DM Sans" font-size="13" font-weight="700" fill="#1E40AF">Window</text>
+          <text x="110" y="331" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#64748B">in-memory</text>
+
+          <!-- TokenBucket and SlidingWindow: in step1 sit flat; in step2 move under AbstractRedis.
+               We handle this by hiding the "flat" versions and showing "deep" versions in step2+. -->
+          <!-- Flat TokenBucket (step 1) -->
+          <g id="flatToken">
+            <rect x="300" y="260" width="180" height="80" rx="10" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+            <text x="390" y="300" text-anchor="middle" font-family="DM Sans" font-size="14" font-weight="700" fill="#1E40AF">TokenBucket</text>
+            <text x="390" y="321" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#DC2626">Redis · Lua</text>
+          </g>
+          <!-- Flat SlidingWindow (step 1) -->
+          <g id="flatSliding">
+            <rect x="580" y="260" width="180" height="80" rx="10" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+            <text x="670" y="300" text-anchor="middle" font-family="DM Sans" font-size="14" font-weight="700" fill="#1E40AF">SlidingWindow</text>
+            <text x="670" y="321" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#DC2626">Redis · Lua</text>
+          </g>
+
+          <!-- ══ Abstract base layer (hidden until step 2) ══ -->
+          <g id="layerAbstract" style="opacity:0;transition:opacity .5s ease .1s">
+            <!-- interface → abstract vertical line -->
+            <line x1="390" y1="88" x2="390" y2="118" stroke="#34D399" stroke-width="2"/>
+            <rect x="150" y="118" width="480" height="68" rx="12" fill="#D1FAE5" stroke="#34D399" stroke-width="2.5"/>
+            <text x="390" y="141" text-anchor="middle" font-family="JetBrains Mono" font-size="11" font-weight="700" fill="#065F46">«abstract class»</text>
+            <text x="390" y="161" text-anchor="middle" font-family="Outfit" font-size="17" font-weight="800" fill="#065F46">AbstractRateLimitStrategy</text>
+            <text x="390" y="179" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#047857">validates key · limit · windowMs</text>
+            <!-- abstract → LocalFixed (always visible when abstract is visible) -->
+            <line x1="280" y1="186" x2="110" y2="260" stroke="#34D399" stroke-width="1.8" marker-end="url(#mk-green)"/>
+            <!-- abstract → TokenBucket + SlidingWindow flat (step 2 only; hidden in step 3) -->
+            <g id="linesAbstractToFlat" style="transition:opacity .4s ease">
+              <line x1="390" y1="186" x2="390" y2="260" stroke="#34D399" stroke-width="1.8" marker-end="url(#mk-green)"/>
+              <line x1="500" y1="186" x2="670" y2="260" stroke="#34D399" stroke-width="1.8" marker-end="url(#mk-green)"/>
+            </g>
+            <!-- abstract → AbstractRedis (step 3 only, lives inside layerRedis below) -->
+          </g>
+
+          <!-- ══ Green line replacements for leaves from abstract ══ -->
+          <!-- (abstract → LocalFixed already in layerAbstract above) -->
+
+          <!-- ══ AbstractRedis layer (hidden until step 3) ══ -->
+          <g id="layerRedis" style="opacity:0;transition:opacity .5s ease .1s">
+            <!-- abstract bottom → AbstractRedis top -->
+            <line x1="500" y1="186" x2="585" y2="370" stroke="#34D399" stroke-width="1.8" marker-end="url(#mk-green)"/>
+            <rect x="430" y="370" width="310" height="60" rx="12" fill="#FEF3C7" stroke="#FBBF24" stroke-width="2.5"/>
+            <text x="585" y="394" text-anchor="middle" font-family="JetBrains Mono" font-size="11" font-weight="700" fill="#92400E">«abstract»  AbstractRedis</text>
+            <text x="585" y="414" text-anchor="middle" font-family="JetBrains Mono" font-size="11" fill="#B45309">executes Lua · handles connections</text>
+            <!-- amber lines → Token, Sliding -->
+            <line x1="505" y1="430" x2="475" y2="470" stroke="#FBBF24" stroke-width="1.8" marker-end="url(#mk-amber)"/>
+            <line x1="665" y1="430" x2="690" y2="470" stroke="#FBBF24" stroke-width="1.8" marker-end="url(#mk-amber)"/>
+            <!-- Deep TokenBucket -->
+            <rect x="380" y="470" width="185" height="58" rx="9" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+            <text x="472" y="496" text-anchor="middle" font-family="DM Sans" font-size="13" font-weight="700" fill="#1E40AF">TokenBucket</text>
+            <text x="472" y="515" text-anchor="middle" font-family="JetBrains Mono" font-size="10" fill="#3B82F6">bucket logic only</text>
+            <!-- Deep SlidingWindow -->
+            <rect x="590" y="470" width="185" height="58" rx="9" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+            <text x="682" y="496" text-anchor="middle" font-family="DM Sans" font-size="13" font-weight="700" fill="#1E40AF">SlidingWindow</text>
+            <text x="682" y="515" text-anchor="middle" font-family="JetBrains Mono" font-size="10" fill="#3B82F6">sorted-set logic only</text>
+          </g>
+
+        </svg><!-- end treeSvg -->
+
+        <div id="diagramLabel" style="margin-top:8px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;min-height:22px">
+          <span id="lbl1" style="color:#1E40AF;transition:opacity .3s">🧩 Abstraction — caller depends on interface, not concrete class</span>
+          <span id="lbl2" style="color:#065F46;opacity:0;position:absolute;transition:opacity .3s;pointer-events:none">🌲 Inheritance L1 — AbstractRateLimitStrategy owns validation</span>
+          <span id="lbl3" style="color:#92400E;opacity:0;position:absolute;transition:opacity .3s;pointer-events:none">🌲 Inheritance L2 — AbstractRedis owns Lua execution · each class, one job</span>
+        </div>
+      </div><!-- end wrapper -->
+    </div><!-- end phase 1 -->
+
+  </div>
+</section>
+
+
+<!-- ════ SLIDE 7 · POLYMORPHISM ════ -->
+<section class="slide" data-slide="7">
+  <div class="slide-num">OOP · Polymorphism</div>
+  <div class="phase-title" style="margin-bottom:4px">
+    Same call · <span class="accent">different behavior</span> at runtime
+  </div>
+  <div class="phase-subtitle" style="margin-bottom:14px">
+    The annotation tells AOP which strategy to use — then just calls <code style="font-family:'JetBrains Mono';background:var(--blue-50);padding:2px 8px;border-radius:6px;font-size:.88em">evaluate()</code>
+  </div>
+
+  <!-- Annotation badge — fades in, triggers the dim animation -->
+  <div id="annotBadge" style="
+    font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;
+    background:#0F172A;color:#F8FAFC;padding:10px 24px;border-radius:10px;
+    margin-bottom:16px;opacity:0;transition:opacity .5s ease;
+    border:1.5px solid #3B82F6;letter-spacing:.02em">
+    <span style="color:#60A5FA">@RateLimit</span><span style="color:#F8FAFC">(</span><span style="color:#34D399">3</span><span style="color:#94A3B8">, </span><span style="color:#34D399">10</span><span style="color:#94A3B8">, </span><span style="color:#FBBF24">TOKEN_BUCKET</span><span style="color:#F8FAFC">)</span>
+  </div>
+
+  <svg id="polysvg" viewBox="0 0 700 270" width="100%" style="max-width:700px" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="pma" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+        <path d="M0,0 L10,4 L0,8Z" fill="#94A3B8"/>
+      </marker>
+      <marker id="pmg" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+        <path d="M0,0 L10,4 L0,8Z" fill="#22C55E"/>
+      </marker>
+    </defs>
+
+    <!-- ══ AOP box ══ -->
+    <rect x="10" y="95" width="185" height="80" rx="14" fill="#FEF3C7" stroke="#FBBF24" stroke-width="2.5"/>
+    <text x="102" y="125" text-anchor="middle" font-family="DM Sans" font-size="14" font-weight="700" fill="#92400E">AOP Interceptor</text>
+    <text x="102" y="148" text-anchor="middle" font-family="JetBrains Mono" font-size="12" font-weight="700" fill="#D97706">strategy.evaluate()</text>
+    <text x="102" y="167" text-anchor="middle" font-family="JetBrains Mono" font-size="10" fill="#B45309">interface only</text>
+
+    <!-- track lines AOP → 3 impls -->
+    <line x1="195" y1="120" x2="310" y2="44"  stroke="#CBD5E1" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#pma)"/>
+    <line x1="195" y1="135" x2="310" y2="135" stroke="#CBD5E1" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#pma)"/>
+    <line x1="195" y1="150" x2="310" y2="226" stroke="#CBD5E1" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#pma)"/>
+
+    <!-- ══ FixedWindow ══ -->
+    <g id="boxFixed">
+      <rect x="310" y="10" width="185" height="68" rx="12" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2" style="transition:fill .6s,stroke .6s"/>
+      <text x="402" y="36" text-anchor="middle" font-family="DM Sans" font-size="14" font-weight="700" fill="#1E40AF" style="transition:fill .6s">FixedWindow</text>
+      <text x="402" y="55" text-anchor="middle" font-family="JetBrains Mono" font-size="10" fill="#3B82F6" style="transition:fill .6s">in-memory logic</text>
+    </g>
+
+    <!-- ══ TokenBucket ══ -->
+    <g id="boxToken">
+      <rect x="310" y="101" width="185" height="68" rx="12" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2" style="transition:fill .6s,stroke .6s"/>
+      <text x="402" y="127" text-anchor="middle" font-family="DM Sans" font-size="14" font-weight="700" fill="#1E40AF" style="transition:fill .6s">TokenBucket</text>
+      <text x="402" y="147" text-anchor="middle" font-family="JetBrains Mono" font-size="10" fill="#3B82F6" style="transition:fill .6s">token-bucket logic</text>
+      <!-- chosen checkmark — hidden until annotation fires -->
+      <text id="tokenCheck" x="402" y="165" text-anchor="middle" font-family="JetBrains Mono" font-size="10" font-weight="700" fill="#1E40AF" opacity="0" style="transition:opacity .5s .8s">✓ runs this</text>
+    </g>
+
+    <!-- ══ SlidingWindow ══ -->
+    <g id="boxSliding">
+      <rect x="310" y="192" width="185" height="68" rx="12" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2" style="transition:fill .6s,stroke .6s"/>
+      <text x="402" y="218" text-anchor="middle" font-family="DM Sans" font-size="14" font-weight="700" fill="#1E40AF" style="transition:fill .6s">SlidingWindow</text>
+      <text x="402" y="237" text-anchor="middle" font-family="JetBrains Mono" font-size="10" fill="#3B82F6" style="transition:fill .6s">sorted-set logic</text>
+    </g>
+
+    <!-- ══ Flowing dots — all blue initially, Fixed+Sliding go grey after annotation ══ -->
+    <!-- dot → FixedWindow -->
+    <circle id="dotFixed" r="6" opacity="0" fill="#3B82F6">
+      <animateMotion dur="2.4s" repeatCount="indefinite" path="M195,120 L310,44" calcMode="spline" keyTimes="0;1" keySplines="0.4 0 0.2 1"/>
+      <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.8;1" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+    <!-- dot → TokenBucket -->
+    <circle id="dotToken" r="6" opacity="0" fill="#3B82F6">
+      <animateMotion dur="2.4s" repeatCount="indefinite" begin="0.8s" path="M195,135 L310,135" calcMode="spline" keyTimes="0;1" keySplines="0.4 0 0.2 1"/>
+      <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.8;1" dur="2.4s" repeatCount="indefinite" begin="0.8s"/>
+    </circle>
+    <!-- dot → SlidingWindow -->
+    <circle id="dotSliding" r="6" opacity="0" fill="#3B82F6">
+      <animateMotion dur="2.4s" repeatCount="indefinite" begin="1.6s" path="M195,150 L310,226" calcMode="spline" keyTimes="0;1" keySplines="0.4 0 0.2 1"/>
+      <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.8;1" dur="2.4s" repeatCount="indefinite" begin="1.6s"/>
+    </circle>
+
+    <!-- result line TokenBucket → Decision -->
+    <line x1="495" y1="135" x2="590" y2="135" stroke="#CBD5E1" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#pmg)"/>
+    <!-- green result dot — only flows after annotation fires (driven by JS class) -->
+    <circle id="dotResult" r="7" opacity="0" fill="#22C55E">
+      <animateMotion dur="1.6s" repeatCount="indefinite" begin="999s" path="M495,135 L590,135"/>
+      <animate id="dotResultAnim" attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.8;1" dur="1.6s" repeatCount="indefinite" begin="999s"/>
+    </circle>
+
+    <!-- Decision box -->
+    <rect x="590" y="105" width="100" height="60" rx="12" fill="#D1FAE5" stroke="#6EE7B7" stroke-width="2"/>
+    <text x="640" y="131" text-anchor="middle" font-family="JetBrains Mono" font-size="10" font-weight="700" fill="#065F46">Decision</text>
+    <text x="640" y="152" text-anchor="middle" font-family="DM Sans" font-size="18" fill="#065F46">✅</text>
+
+    <!-- bottom label -->
+    <text x="350" y="268" text-anchor="middle" font-family="JetBrains Mono" font-size="12" font-weight="700" fill="#1E40AF">🔀 one call · the object decides what runs</text>
+  </svg>
+
+  <script>
+  (function(){
+    var slide7 = document.querySelector('[data-slide="7"]');
+    var timer = null;
+
+    function resetState() {
+      // Reset annotation badge
+      var badge = document.getElementById('annotBadge');
+      if (badge) badge.style.opacity = '0';
+
+      // Reset FixedWindow
+      var fixedRect = document.querySelector('#boxFixed rect');
+      var fixedTexts = document.querySelectorAll('#boxFixed text');
+      if (fixedRect) { fixedRect.style.fill='#DBEAFE'; fixedRect.style.stroke='#93C5FD'; }
+      fixedTexts.forEach(function(t){ t.style.fill=''; });
+
+      // Reset SlidingWindow
+      var slidRect = document.querySelector('#boxSliding rect');
+      var slidTexts = document.querySelectorAll('#boxSliding text');
+      if (slidRect) { slidRect.style.fill='#DBEAFE'; slidRect.style.stroke='#93C5FD'; }
+      slidTexts.forEach(function(t){ t.style.fill=''; });
+
+      // Reset TokenBucket
+      var tokRect = document.querySelector('#boxToken rect');
+      if (tokRect) { tokRect.style.fill='#DBEAFE'; tokRect.style.stroke='#93C5FD'; tokRect.style.strokeWidth='2'; }
+      var tokTexts = document.querySelectorAll('#boxToken text');
+      tokTexts.forEach(function(t){ t.style.fill=''; });
+      var check = document.getElementById('tokenCheck');
+      if (check) check.style.opacity='0';
+
+      // Reset dots visibility
+      var dFixed = document.getElementById('dotFixed');
+      var dSlid  = document.getElementById('dotSliding');
+      if (dFixed) dFixed.style.opacity='';
+      if (dSlid)  dSlid.style.opacity='';
+
+      // Stop result dot
+      var dRes = document.getElementById('dotResult');
+      var aRes = document.getElementById('dotResultAnim');
+      if (dRes && dRes.querySelector('animateMotion')) {
+        dRes.querySelector('animateMotion').setAttribute('begin', '999s');
+      }
+      if (aRes) aRes.setAttribute('begin', '999s');
+
+      // Restart SVG animations
+      var svg = document.getElementById('polysvg');
+      if (svg && svg.setCurrentTime) { svg.setCurrentTime(0); svg.unpauseAnimations(); }
+
+      if (timer) { clearTimeout(timer); timer = null; }
+    }
+
+    function fireAnnotation() {
+      // 1. Show annotation badge
+      var badge = document.getElementById('annotBadge');
+      if (badge) badge.style.opacity = '1';
+
+      // 2. Dim + highlight after short delay
+      timer = setTimeout(function(){
+        var fixedRect = document.querySelector('#boxFixed rect');
+        var fixedTexts = document.querySelectorAll('#boxFixed text');
+        if (fixedRect) { fixedRect.style.fill='#F8FAFC'; fixedRect.style.stroke='#E2E8F0'; }
+        fixedTexts.forEach(function(t){ t.style.fill='#CBD5E1'; });
+
+        var slidRect = document.querySelector('#boxSliding rect');
+        var slidTexts = document.querySelectorAll('#boxSliding text');
+        if (slidRect) { slidRect.style.fill='#F8FAFC'; slidRect.style.stroke='#E2E8F0'; }
+        slidTexts.forEach(function(t){ t.style.fill='#CBD5E1'; });
+
+        var tokRect = document.querySelector('#boxToken rect');
+        var tokTexts = document.querySelectorAll('#boxToken text');
+        if (tokRect) { tokRect.style.fill='#DBEAFE'; tokRect.style.stroke='#3B82F6'; tokRect.style.strokeWidth='2.5'; }
+        tokTexts.forEach(function(t){ t.style.fill='#1E40AF'; });
+        var check = document.getElementById('tokenCheck');
+        if (check) check.style.opacity='1';
+
+        var dFixed = document.getElementById('dotFixed');
+        var dSlid  = document.getElementById('dotSliding');
+        if (dFixed) dFixed.style.opacity='0';
+        if (dSlid)  dSlid.style.opacity='0';
+
+        var dRes = document.getElementById('dotResult');
+        var aRes = document.getElementById('dotResultAnim');
+        if (dRes && dRes.querySelector('animateMotion')) {
+          dRes.querySelector('animateMotion').setAttribute('begin', '0s');
+        }
+        if (aRes) aRes.setAttribute('begin', '0s');
+      }, 400);
+    }
+
+    var observer = new MutationObserver(function(){
+      if (slide7) {
+        if (slide7.classList.contains('active')) {
+          resetState();
+          timer = setTimeout(fireAnnotation, 1800);
+        } else {
+          resetState();
+        }
+      }
+    });
+    if (slide7) observer.observe(slide7, { attributes: true, attributeFilter: ['class'] });
+  })();
+  </script>
+</section>
+
+<!-- ════ SLIDE 8 · ENCAPSULATION — what to return ════ -->
+<section class="slide" data-slide="8">
+  <div class="slide-num">OOP · Encapsulation</div>
+  <h2 class="anim" data-delay="0" style="text-align:center">Finally — what do we <span class="accent">return</span>?</h2>
+  <p class="subtitle anim" data-delay="70" style="margin-bottom:28px">
+    After evaluation, we need to wrap the result into a single object
+  </p>
+  <div class="anim" data-delay="150" style="display:flex;gap:20px;justify-content:center;flex-wrap:wrap;max-width:760px">
+    <div class="oop-req-card">
+      <div style="font-size:34px;margin-bottom:12px">✅ / ❌</div>
+      <div class="oop-req-title" style="color:#1E40AF">Decision</div>
+      <div class="oop-req-body"><code style="font-family:'JetBrains Mono';font-size:12px">allowed: true / false</code></div>
+    </div>
+    <div class="oop-req-card">
+      <div style="font-size:34px;margin-bottom:12px">⏱</div>
+      <div class="oop-req-title" style="color:#92400E">Retry Time</div>
+      <div class="oop-req-body">only when <span style="color:var(--red-600);font-weight:600">rejected</span> — how long to wait?</div>
+    </div>
+    <div class="oop-req-card">
+      <div style="font-size:34px;margin-bottom:12px">🔒</div>
+      <div class="oop-req-title" style="color:#5B21B6">Immutable</div>
+      <div class="oop-req-body">once created — nobody can change the result</div>
+    </div>
+  </div>
+  <div class="anim" data-delay="300" style="margin-top:24px;background:var(--blue-50);border:1.5px solid var(--blue-200);border-radius:12px;padding:10px 28px;font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#1D4ED8">
+    → We wrap this into <code>RateLimitDecision</code> with 3-layer encapsulation
+  </div>
+</section>
+
+<!-- ════ SLIDE 9 · ENCAPSULATION — code walkthrough (3 phases) ════ -->
+<section class="slide" data-slide="9" data-phases="3">
+  <div class="step-indicator"></div>
+  <div class="phase-container">
+
+    <!-- ── Phase 0: Layer 1 — final + private fields ── -->
+    <div class="phase active" data-phase="0">
+      <div class="slide-num">OOP · Encapsulation</div>
+      <div style="display:flex;gap:32px;align-items:center;justify-content:center;width:100%;max-width:940px">
+        <div style="flex:1;min-width:0">
+          <div class="phase-title" style="text-align:left;margin-bottom:6px">
+            Layer 1 — <span class="accent">final</span> + <span class="accent">private fields</span>
+          </div>
+          <div class="phase-subtitle" style="text-align:left;margin-bottom:14px">
+            The fields are <code class="ic">private</code> and <code class="ic">final</code> — nobody can modify them after creation
+          </div>
+          <div class="oop-code-block">
+            <div class="oop-code-line" style="--d:.05s">
+              <span class="ct-blue">public </span><span class="hl-green">final</span><span class="ct-blue"> class</span><span class="ct-white"> RateLimitDecision {</span>
+            </div>
+            <div class="oop-code-line" style="--d:.15s">
+              <span class="ct-white">&nbsp;&nbsp;</span><span class="hl-green">private final</span><span class="ct-blue"> boolean</span><span class="ct-white"> allowed;</span>
+            </div>
+            <div class="oop-code-line" style="--d:.25s">
+              <span class="ct-white">&nbsp;&nbsp;</span><span class="hl-green">private final</span><span class="ct-blue"> long</span><span class="ct-white"> retryAfterSeconds;</span>
+            </div>
+            <div class="oop-code-line" style="--d:.35s;color:#475569">&nbsp;&nbsp;...</div>
+            <div class="oop-code-line" style="--d:.45s"><span class="ct-white">}</span></div>
+          </div>
+        </div>
+        <div style="flex:0 0 240px;display:flex;flex-direction:column;gap:12px">
+          <div class="oop-annot green">
+            <div class="oop-annot-title">final class</div>
+            <div class="oop-annot-body">Nobody can extend this — the result type is locked</div>
+          </div>
+          <div class="oop-annot blue">
+            <div class="oop-annot-title">private final fields</div>
+            <div class="oop-annot-body">Set once in constructor — immutable after creation</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Phase 1: Layer 2 — private constructor ── -->
+    <div class="phase" data-phase="1">
+      <div class="slide-num">OOP · Encapsulation</div>
+      <div style="display:flex;gap:32px;align-items:center;justify-content:center;width:100%;max-width:940px">
+        <div style="flex:1;min-width:0">
+          <div class="phase-title" style="text-align:left;margin-bottom:6px">
+            Layer 2 — <span class="accent">private constructor</span>
+          </div>
+          <div class="phase-subtitle" style="text-align:left;margin-bottom:14px">
+            Cannot be instantiated via <code class="ic">new</code> directly — forces everyone through the factory
+          </div>
+          <div class="oop-code-block">
+            <div class="oop-code-comment">// The only way to build a RateLimitDecision</div>
+            <div class="oop-code-line" style="--d:.1s">
+              <span class="hl-yellow">private</span><span class="ct-white"> RateLimitDecision(</span><span class="ct-blue">boolean</span><span class="ct-white"> allowed,</span>
+            </div>
+            <div class="oop-code-line" style="--d:.2s">
+              <span class="ct-white">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="ct-blue">long</span><span class="ct-white"> retryAfterSeconds) {</span>
+            </div>
+            <div class="oop-code-line" style="--d:.3s">
+              <span class="ct-white">&nbsp;&nbsp;this.allowed = allowed;</span>
+            </div>
+            <div class="oop-code-line" style="--d:.4s">
+              <span class="ct-white">&nbsp;&nbsp;this.retryAfterSeconds = retryAfterSeconds;</span>
+            </div>
+            <div class="oop-code-line" style="--d:.5s"><span class="ct-white">}</span></div>
+          </div>
+        </div>
+        <div style="flex:0 0 240px">
+          <div class="oop-annot yellow">
+            <div class="oop-annot-title">private constructor</div>
+            <div class="oop-annot-body">No one outside can call <code style="font-family:'JetBrains Mono';font-size:11px;background:#FDE68A;padding:1px 5px;border-radius:3px">new RateLimitDecision()</code> — guaranteed valid state</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Phase 2: Layer 3 — factory + validation ── -->
+    <div class="phase" data-phase="2">
+      <div class="slide-num">OOP · Encapsulation</div>
+      <div style="display:flex;gap:32px;align-items:center;justify-content:center;width:100%;max-width:940px">
+        <div style="flex:1;min-width:0">
+          <div class="phase-title" style="text-align:left;margin-bottom:6px">
+            Layer 3 — <span class="accent">factory + validation</span>
+          </div>
+          <div class="phase-subtitle" style="text-align:left;margin-bottom:14px">
+            <code class="ic">rejected()</code> validates before creating — invalid states are never allowed into the system
+          </div>
+          <div class="oop-code-block">
+            <div class="oop-code-comment">// Reusable singleton — no allocation on happy path</div>
+            <div class="oop-code-line" style="--d:.08s">
+              <span class="ct-blue">private static final</span><span class="ct-white"> RateLimitDecision ALLOWED</span>
+            </div>
+            <div class="oop-code-line" style="--d:.16s">
+              <span class="ct-white">&nbsp;&nbsp;= </span><span class="ct-blue">new</span><span class="ct-white"> RateLimitDecision(</span><span class="ct-blue">true</span><span class="ct-white">, 0);</span>
+            </div>
+            <div class="oop-code-line" style="--d:.24s">
+              <span class="ct-blue">public static</span><span class="ct-white"> RateLimitDecision </span><span class="ct-green">allowed</span><span class="ct-white">() {</span>
+            </div>
+            <div class="oop-code-line" style="--d:.32s">
+              <span class="ct-white">&nbsp;&nbsp;</span><span class="ct-blue">return</span><span class="ct-white"> ALLOWED;</span><span class="ct-dim">&nbsp;// single instance</span>
+            </div>
+            <div class="oop-code-line" style="--d:.40s"><span class="ct-white">}</span></div>
+            <div class="oop-code-line" style="--d:.48s">
+              <span class="ct-blue">public static</span><span class="ct-white"> RateLimitDecision </span><span class="ct-red">rejected</span><span class="ct-white">(</span><span class="ct-blue">long</span><span class="ct-white"> retryAfterSeconds) {</span>
+            </div>
+            <div class="oop-code-line" style="--d:.56s">
+              <span class="ct-white">&nbsp;&nbsp;</span><span class="ct-blue">if</span><span class="ct-white"> (retryAfterSeconds &lt;= 0) </span><span class="ct-blue">throw</span><span class="ct-white"> </span><span class="ct-red">new</span><span class="ct-white"> IllegalArgumentException(...);&nbsp;</span><span class="hl-red">← validates</span>
+            </div>
+            <div class="oop-code-line" style="--d:.64s">
+              <span class="ct-white">&nbsp;&nbsp;</span><span class="ct-blue">return new</span><span class="ct-white"> RateLimitDecision(</span><span class="ct-blue">false</span><span class="ct-white">, retryAfterSeconds);</span>
+            </div>
+            <div class="oop-code-line" style="--d:.72s"><span class="ct-white">}</span></div>
+          </div>
+        </div>
+        <div style="flex:0 0 240px;display:flex;flex-direction:column;gap:12px">
+          <div class="oop-annot red">
+            <div class="oop-annot-title">rejected() validates</div>
+            <div class="oop-annot-body">Negative retry throws immediately — no invalid object can exist</div>
+          </div>
+          <div class="oop-annot green">
+            <div class="oop-annot-title">allowed() = singleton</div>
+            <div class="oop-annot-body">ALLOWED is reused — zero allocation on the happy path</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ════ SLIDE 10 · OOP CLOSING ════ -->
+<section class="slide" data-slide="10">
+  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;max-width:820px;text-align:center">
+    <h2 class="anim" data-delay="0">We didn't use OOP <span class="accent">just for the sake of it</span></h2>
+    <p class="subtitle anim" data-delay="100" style="margin-top:16px;margin-bottom:36px;font-size:clamp(17px,1.6vw,22px)">
+      They naturally came out as we solved real problems in the design
+    </p>
+    <div class="anim" data-delay="200" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;width:100%">
+      <div class="oop-summary-row" style="--accent:#3B82F6;--bg:#EFF6FF;--border:#93C5FD">
+        <span class="oop-summary-icon">🧩</span>
+        <div><span class="oop-summary-principle" style="color:#1E40AF">Abstraction</span> — <span class="oop-summary-desc">define WHAT</span></div>
+      </div>
+      <div class="oop-summary-row" style="--accent:#34D399;--bg:#D1FAE5;--border:#6EE7B7">
+        <span class="oop-summary-icon">🌲</span>
+        <div><span class="oop-summary-principle" style="color:#065F46">Inheritance</span> — <span class="oop-summary-desc">reuse logic</span></div>
+      </div>
+      <div class="oop-summary-row" style="--accent:#FBBF24;--bg:#FEF3C7;--border:#FCD34D">
+        <span class="oop-summary-icon">🔀</span>
+        <div><span class="oop-summary-principle" style="color:#92400E">Polymorphism</span> — <span class="oop-summary-desc">switch behavior</span></div>
+      </div>
+      <div class="oop-summary-row" style="--accent:#A78BFA;--bg:#F5F3FF;--border:#C4B5FD">
+        <span class="oop-summary-icon">🔒</span>
+        <div><span class="oop-summary-principle" style="color:#5B21B6">Encapsulation</span> — <span class="oop-summary-desc">protect data</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ════ SLIDE 11 · BEST LEARNING — Testing ════ -->
+<section class="slide" data-slide="11">
+  <div class="slide-num">Best Learning</div>
+  <h2 class="anim" data-delay="0" style="text-align:center;margin-bottom:6px">
+    Industrial-grade <span class="accent">Testing</span>
+  </h2>
+  <p class="subtitle anim" data-delay="70" style="margin-bottom:36px">Two layers — each answers a different question</p>
+
+  <div class="anim" data-delay="150" style="display:flex;gap:28px;justify-content:center;max-width:760px;width:100%">
+
+    <!-- JMH -->
+    <div style="flex:1;background:#fff;border:2px solid #93C5FD;border-radius:20px;padding:32px 28px;text-align:center">
+      <div style="width:52px;height:52px;border-radius:14px;background:#DBEAFE;display:flex;align-items:center;justify-content:center;font-size:26px;margin:0 auto 16px">⚡</div>
+      <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:24px;color:#1E40AF;margin-bottom:4px">JMH</div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#94A3B8;margin-bottom:20px">Java Microbenchmark Harness</div>
+      <div style="background:#EFF6FF;border-radius:12px;padding:16px 18px">
+        <div style="font-size:13px;color:#1E40AF;font-weight:600;line-height:1.7">
+          Is the <strong>algorithm itself</strong> fast enough?<br>
+          <span style="font-weight:400;color:#64748B">No HTTP · No Redis · No Spring</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Divider -->
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0">
+      <span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--slate-300);font-weight:700">+</span>
+    </div>
+
+    <!-- JMeter -->
+    <div style="flex:1;background:#fff;border:2px solid #6EE7B7;border-radius:20px;padding:32px 28px;text-align:center">
+      <div style="width:52px;height:52px;border-radius:14px;background:#D1FAE5;display:flex;align-items:center;justify-content:center;font-size:26px;margin:0 auto 16px">🌊</div>
+      <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:24px;color:#065F46;margin-bottom:4px">JMeter</div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#94A3B8;margin-bottom:20px">Load Testing Tool</div>
+      <div style="background:#F0FDF4;border-radius:12px;padding:16px 18px">
+        <div style="font-size:13px;color:#065F46;font-weight:600;line-height:1.7">
+          Does the <strong>full system</strong> hold under load?<br>
+          <span style="font-weight:400;color:#64748B">Real HTTP · Real Redis · Real traffic</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ════ SLIDE 12 · BEST LEARNING — Results ════ -->
+<section class="slide" data-slide="12">
+  <div class="slide-num">Best Learning</div>
+  <h2 class="anim" data-delay="0" style="text-align:center;margin-bottom:6px">
+    Testing <span class="accent">Results</span>
+  </h2>
+  <p class="subtitle anim" data-delay="70" style="margin-bottom:32px">Numbers from both layers</p>
+
+  <div class="anim" data-delay="150" style="display:flex;gap:28px;justify-content:center;max-width:820px;width:100%">
+
+    <!-- JMH Results -->
+    <div style="flex:1;background:#fff;border:2px solid #93C5FD;border-radius:20px;padding:30px 28px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+        <div style="width:44px;height:44px;border-radius:12px;background:#DBEAFE;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">⚡</div>
+        <div>
+          <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:20px;color:#1E40AF">JMH Result</div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#64748B">Algorithm Only</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="background:#EFF6FF;border-radius:12px;padding:12px 16px">
+          <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:22px;color:#1E40AF;line-height:1">~22M</div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#64748B;margin-top:3px">ops / sec  (single thread)</div>
+        </div>
+        <div style="background:#EFF6FF;border-radius:12px;padding:12px 16px">
+          <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:22px;color:#1E40AF;line-height:1">~45 ns</div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#64748B;margin-top:3px">per decision</div>
+        </div>
+        <div style="background:#FEF3C7;border-radius:12px;padding:12px 16px;border:1px solid #FCD34D">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#92400E">⚠ Throughput drops under contention</div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#B45309;margin-top:4px">CAS retries on concurrent writes</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Divider -->
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;flex-shrink:0">
+      <div style="width:1px;height:60px;background:var(--slate-200)"></div>
+      <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--slate-400);font-weight:700">vs</span>
+      <div style="width:1px;height:60px;background:var(--slate-200)"></div>
+    </div>
+
+    <!-- JMeter Results -->
+    <div style="flex:1;background:#fff;border:2px solid #6EE7B7;border-radius:20px;padding:30px 28px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+        <div style="width:44px;height:44px;border-radius:12px;background:#D1FAE5;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0">🌊</div>
+        <div>
+          <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:20px;color:#065F46">JMeter Result</div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#64748B">End-to-End</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="background:#F0FDF4;border-radius:12px;padding:12px 16px">
+          <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:22px;color:#065F46;line-height:1">~50K</div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#64748B;margin-top:3px">peak RPS</div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <div style="flex:1;background:#F0FDF4;border-radius:12px;padding:12px 14px">
+            <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:20px;color:#065F46;line-height:1">~7 ms</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#64748B;margin-top:3px">avg latency</div>
+          </div>
+          <div style="flex:1;background:#FEF2F2;border-radius:12px;padding:12px 14px;border:1px solid #FCA5A5">
+            <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:20px;color:#DC2626;line-height:1">~95%</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#B91C1C;margin-top:3px">error rate</div>
+          </div>
+        </div>
+        <div style="background:#FEF2F2;border-radius:12px;padding:12px 16px;border:1px solid #FCA5A5">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#DC2626">🔴 Bottleneck = Redis network call</div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#B91C1C;margin-top:4px">algorithm is fast · network is the ceiling</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ════ SLIDE 13 · Tool & Tech Stack ════ -->
+<section class="slide" data-slide="13">
+  <div class="slide-num">Tool & Tech Stack</div>
+  <h2 class="anim" data-delay="0" style="text-align:center;margin-bottom:24px">Tool & <span class="accent">Tech Stack</span></h2>
+
+  <div class="anim" data-delay="120" style="display:grid;grid-template-columns:1fr 1fr;gap:14px 40px;max-width:820px;width:100%">
+
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px">
+      <span style="font-size:18px">☕</span>
+      <div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--slate-400)">Language</div><div style="font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;color:var(--slate-800)">Java 21</div></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px">
+      <span style="font-size:18px">🔧</span>
+      <div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--slate-400)">Build Tool</div><div style="font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;color:var(--slate-800)">Maven (mvnw)</div></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px">
+      <span style="font-size:18px">🍃</span>
+      <div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--slate-400)">Backend Framework</div><div style="font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;color:var(--slate-800)">Spring Boot 3.5.12</div></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px">
+      <span style="font-size:18px">🌐</span>
+      <div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--slate-400)">Web / API</div><div style="font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;color:var(--slate-800)">Spring Web</div></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px">
+      <span style="font-size:18px">🎯</span>
+      <div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--slate-400)">Cross-cutting</div><div style="font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;color:var(--slate-800)">Spring AOP</div></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px">
+      <span style="font-size:18px">🔴</span>
+      <div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--slate-400)">Data Store</div><div style="font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;color:var(--slate-800)">Redis + Lua Scripts</div></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px">
+      <span style="font-size:18px">📊</span>
+      <div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--slate-400)">Observability</div><div style="font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;color:var(--slate-800)">Micrometer · Prometheus · Grafana</div></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px">
+      <span style="font-size:18px">🧪</span>
+      <div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--slate-400)">Testing</div><div style="font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;color:var(--slate-800)">JUnit · Spring Boot Test · Testcontainers</div></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px">
+      <span style="font-size:18px">⚡</span>
+      <div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--slate-400)">Benchmarking</div><div style="font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;color:var(--slate-800)">JMH · JMeter</div></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px">
+      <span style="font-size:18px">🐳</span>
+      <div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--slate-400)">Infrastructure</div><div style="font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;color:var(--slate-800)">Docker</div></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px">
+      <span style="font-size:18px">🔀</span>
+      <div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--slate-400)">Version Control</div><div style="font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;color:var(--slate-800)">Git</div></div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px">
+      <span style="font-size:18px">🤖</span>
+      <div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--slate-400)">AI (Claude Code)</div><div style="font-family:'DM Sans',sans-serif;font-size:15px;font-weight:600;color:var(--slate-800)">Javadocs · Shell Scripts · Test Viz</div></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ════ SLIDE 14 · Findings & Lessons Learned ════ -->
+<section class="slide" data-slide="14">
+  <div class="slide-num">Findings</div>
+  <h2 class="anim" data-delay="0" style="text-align:center;margin-bottom:24px">Findings & <span class="accent">Lessons Learned</span></h2>
+
+  <div class="anim" data-delay="120" style="display:flex;flex-direction:column;gap:14px;max-width:780px;width:100%">
+
+    <div style="display:flex;align-items:flex-start;gap:14px;padding:16px 20px;background:#fff;border:1.5px solid var(--blue-200);border-radius:14px">
+      <span style="font-size:20px;flex-shrink:0;margin-top:2px">🔗</span>
+      <div><div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:17px;color:var(--slate-800)">Distributed Consistency</div><div style="font-family:'DM Sans',sans-serif;font-size:14px;color:var(--slate-500);margin-top:4px;line-height:1.5">Maintaining accurate state across multiple nodes requires careful coordination — Redis Lua scripts ensure atomic read‑check‑update in a single round trip.</div></div>
+    </div>
+
+    <div style="display:flex;align-items:flex-start;gap:14px;padding:16px 20px;background:#fff;border:1.5px solid var(--blue-200);border-radius:14px">
+      <span style="font-size:20px;flex-shrink:0;margin-top:2px">⚡</span>
+      <div><div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:17px;color:var(--slate-800)">Race Condition Prevention</div><div style="font-family:'DM Sans',sans-serif;font-size:14px;color:var(--slate-500);margin-top:4px;line-height:1.5">Atomic Redis operations eliminate race conditions that would otherwise allow limit breaches under concurrent traffic.</div></div>
+    </div>
+
+    <div style="display:flex;align-items:flex-start;gap:14px;padding:16px 20px;background:#fff;border:1.5px solid var(--blue-200);border-radius:14px">
+      <span style="font-size:20px;flex-shrink:0;margin-top:2px">🛡</span>
+      <div><div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:17px;color:var(--slate-800)">Safe Failure Behavior</div><div style="font-family:'DM Sans',sans-serif;font-size:14px;color:var(--slate-500);margin-top:4px;line-height:1.5">When Redis is unreachable, the system must decide: fail open (allow) or fail closed (deny). This is a deliberate design choice.</div></div>
+    </div>
+
+    <div style="display:flex;align-items:flex-start;gap:14px;padding:16px 20px;background:#fff;border:1.5px solid var(--blue-200);border-radius:14px">
+      <span style="font-size:20px;flex-shrink:0;margin-top:2px">🧩</span>
+      <div><div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:17px;color:var(--slate-800)">Separation of Concerns Pays Off</div><div style="font-family:'DM Sans',sans-serif;font-size:14px;color:var(--slate-500);margin-top:4px;line-height:1.5">Clean boundaries (AOP + Strategy Pattern) made the system easy to extend, test, and explain — adding a new algorithm means adding one class, no framework changes.</div></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ════ SLIDE 15 · Limitations & Future Extensions ════ -->
+<section class="slide" data-slide="15">
+  <div class="slide-num">Future Work</div>
+  <h2 class="anim" data-delay="0" style="text-align:center;margin-bottom:24px">Limitations & <span class="accent">Future Extensions</span></h2>
+
+  <div class="anim" data-delay="120" style="display:flex;gap:28px;justify-content:center;max-width:880px;width:100%">
+
+    <!-- Limitations column -->
+    <div style="flex:1;background:#fff;border:2px solid #FCA5A5;border-radius:18px;padding:24px 22px">
+      <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:19px;color:#DC2626;margin-bottom:16px;display:flex;align-items:center;gap:8px">⚠️ Limitations</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="padding:10px 14px;background:#FEF2F2;border-radius:10px">
+          <div style="font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;color:var(--slate-800)">Redis RTT Bottleneck</div>
+          <div style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--slate-500);margin-top:3px">Network round-trip is the main throughput limiter</div>
+        </div>
+        <div style="padding:10px 14px;background:#FEF2F2;border-radius:10px">
+          <div style="font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;color:var(--slate-800)">Single Redis Instance</div>
+          <div style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--slate-500);margin-top:3px">No HA or failover support yet</div>
+        </div>
+        <div style="padding:10px 14px;background:#FEF2F2;border-radius:10px">
+          <div style="font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;color:var(--slate-800)">Fixed Window Boundary Bursts</div>
+          <div style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--slate-500);margin-top:3px">Traffic spikes at window edges can leak through</div>
+        </div>
+        <div style="padding:10px 14px;background:#FEF2F2;border-radius:10px">
+          <div style="font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;color:var(--slate-800)">Sliding Window Memory</div>
+          <div style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--slate-500);margin-top:3px">Sorted set grows under sustained high load</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Future column -->
+    <div style="flex:1;background:#fff;border:2px solid #86EFAC;border-radius:18px;padding:24px 22px">
+      <div style="font-family:'Outfit',sans-serif;font-weight:800;font-size:19px;color:#16A34A;margin-bottom:16px;display:flex;align-items:center;gap:8px">🚀 Future Extensions</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="padding:10px 14px;background:#F0FDF4;border-radius:10px">
+          <div style="font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;color:var(--slate-800)">Async Redis / Local Cache</div>
+          <div style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--slate-500);margin-top:3px">Reactive pipeline or local cache layer to cut RTT</div>
+        </div>
+        <div style="padding:10px 14px;background:#F0FDF4;border-radius:10px">
+          <div style="font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;color:var(--slate-800)">Redis Cluster / Sentinel</div>
+          <div style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--slate-500);margin-top:3px">High availability with automatic failover</div>
+        </div>
+        <div style="padding:10px 14px;background:#F0FDF4;border-radius:10px">
+          <div style="font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;color:var(--slate-800)">Dynamic Policy Management</div>
+          <div style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--slate-500);margin-top:3px">Per-client / per-tenant rate limit configuration</div>
+        </div>
+        <div style="padding:10px 14px;background:#F0FDF4;border-radius:10px">
+          <div style="font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;color:var(--slate-800)">Deeper Observability</div>
+          <div style="font-family:'DM Sans',sans-serif;font-size:12px;color:var(--slate-500);margin-top:3px">Stronger metrics and long-duration load benchmarks</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ════ SLIDE 16 · Resources & References ════ -->
+<section class="slide" data-slide="16">
+  <div class="slide-num">References</div>
+  <h2 class="anim" data-delay="0" style="text-align:center;margin-bottom:28px">Resources & <span class="accent">References</span></h2>
+
+  <div class="anim" data-delay="120" style="display:flex;flex-direction:column;gap:12px;max-width:780px;width:100%">
+
+    <a href="https://bucket4j.com/" target="_blank" style="display:flex;align-items:center;gap:14px;padding:14px 20px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px;text-decoration:none;transition:border-color .2s,box-shadow .2s">
+      <span style="font-size:18px;flex-shrink:0">📦</span>
+      <div>
+        <div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:16px;color:var(--slate-800)">Bucket4j</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--slate-400);margin-top:2px">bucket4j.com</div>
+      </div>
+    </a>
+
+    <a href="https://resilience4j.readme.io/docs/ratelimiter" target="_blank" style="display:flex;align-items:center;gap:14px;padding:14px 20px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px;text-decoration:none;transition:border-color .2s,box-shadow .2s">
+      <span style="font-size:18px;flex-shrink:0">🔄</span>
+      <div>
+        <div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:16px;color:var(--slate-800)">Resilience4j RateLimiter</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--slate-400);margin-top:2px">resilience4j.readme.io/docs/ratelimiter</div>
+      </div>
+    </a>
+
+    <a href="https://docs.spring.io/spring-cloud-gateway/reference/5.0-SNAPSHOT/spring-cloud-gateway-server-webflux/gatewayfilter-factories/requestratelimiter-factory.html" target="_blank" style="display:flex;align-items:center;gap:14px;padding:14px 20px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px;text-decoration:none;transition:border-color .2s,box-shadow .2s">
+      <span style="font-size:18px;flex-shrink:0">🍃</span>
+      <div>
+        <div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:16px;color:var(--slate-800)">Spring Cloud Gateway RequestRateLimiter</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--slate-400);margin-top:2px">docs.spring.io/spring-cloud-gateway</div>
+      </div>
+    </a>
+
+    <a href="https://docs.stripe.com/rate-limits" target="_blank" style="display:flex;align-items:center;gap:14px;padding:14px 20px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px;text-decoration:none;transition:border-color .2s,box-shadow .2s">
+      <span style="font-size:18px;flex-shrink:0">💳</span>
+      <div>
+        <div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:16px;color:var(--slate-800)">Stripe Rate Limits</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--slate-400);margin-top:2px">docs.stripe.com/rate-limits</div>
+      </div>
+    </a>
+
+    <a href="https://stripe.com/blog/rate-limiters" target="_blank" style="display:flex;align-items:center;gap:14px;padding:14px 20px;background:#fff;border:1.5px solid var(--slate-200);border-radius:12px;text-decoration:none;transition:border-color .2s,box-shadow .2s">
+      <span style="font-size:18px;flex-shrink:0">📝</span>
+      <div>
+        <div style="font-family:'Outfit',sans-serif;font-weight:700;font-size:16px;color:var(--slate-800)">Stripe Engineering — Scaling with Rate Limiters</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--slate-400);margin-top:2px">stripe.com/blog/rate-limiters</div>
+      </div>
+    </a>
+
+  </div>
+</section>
+
+</div>
+<div class="nav-bar">
+  <button class="nav-btn" id="prevBtn" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+  <div class="dots" id="dotsContainer"></div>
+  <button class="nav-btn" id="nextBtn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+</div>
+
+<script>
+(()=>{
+  const slides=document.querySelectorAll('.slide'),total=slides.length;
+  let currentSlide=0,currentPhase=0,locked=false;
+  const dotsC=document.getElementById('dotsContainer');
+  slides.forEach((_,i)=>{const d=document.createElement('div');d.className='dot'+(i===0?' active':'');d.addEventListener('click',()=>goToSlide(i));dotsC.appendChild(d)});
+  const dots=dotsC.querySelectorAll('.dot');
+  const prevBtn=document.getElementById('prevBtn'),nextBtn=document.getElementById('nextBtn'),progressFill=document.getElementById('progressFill');
+
+  function pc(s){return parseInt(s.dataset.phases||'1',10)}
+
+  function updateUI(){
+    dots.forEach((d,i)=>d.classList.toggle('active',i===currentSlide));
+    prevBtn.disabled=(currentSlide===0&&currentPhase===0);
+    nextBtn.disabled=(currentSlide===total-1&&currentPhase===pc(slides[currentSlide])-1);
+    // Update all step indicators
+    document.querySelectorAll('.step-indicator').forEach(si=>si.style.display='none');
+    const s=slides[currentSlide],p=pc(s);
+    if(p>1){
+      const si=s.querySelector('.step-indicator');
+      if(si){si.style.display='';si.textContent=`Step ${currentPhase+1} / ${p}`}
+    }
+    let ts=0,cs=0;
+    slides.forEach((sl,i)=>{const c=pc(sl);if(i<currentSlide)cs+=c;else if(i===currentSlide)cs+=currentPhase+1;ts+=c});
+    progressFill.style.width=(cs/ts*100)+'%';
+  }
+
+  function animateIn(s){const a=s.querySelectorAll('.anim');a.forEach(e=>e.classList.remove('visible'));a.forEach(e=>{const d=parseInt(e.dataset.delay||0,10);setTimeout(()=>e.classList.add('visible'),80+d)})}
+
+  function activateCard(slide, cardNum) {
+    const container = slide.querySelector('[data-active-card]');
+    if (!container) return;
+    container.dataset.activeCard = cardNum;
+
+    // Toggle card highlighting
+    container.querySelectorAll('.uc-card').forEach(c => {
+      const cn = parseInt(c.dataset.card);
+      if (cn === cardNum) {
+        c.classList.add('on');
+        // Start animations for this card
+        c.querySelectorAll('.spam-track').forEach(t => t.classList.add('running'));
+        c.querySelectorAll('.spike-line').forEach(t => { t.classList.remove('running'); void t.offsetWidth; t.classList.add('running'); });
+        c.querySelectorAll('.bar-basic,.bar-premium').forEach(t => { t.classList.remove('running'); void t.offsetWidth; t.classList.add('running'); });
+        // Show BLOCKED label after bar fills
+        const bl = c.querySelector('#blockedLabel');
+        if (bl) { bl.style.opacity='0'; setTimeout(()=>{bl.style.opacity='1'},2700); }
+      } else {
+        c.classList.remove('on');
+        c.querySelectorAll('.spam-track').forEach(t => t.classList.remove('running'));
+        c.querySelectorAll('.spike-line').forEach(t => t.classList.remove('running'));
+        c.querySelectorAll('.bar-basic,.bar-premium').forEach(t => t.classList.remove('running'));
+      }
+    });
+  }
+
+  function restartSVGs(el) {
+    el.querySelectorAll('svg').forEach(svg => {
+      if (svg.pauseAnimations) { svg.setCurrentTime(0); svg.unpauseAnimations(); }
+    });
+  }
+  function pauseSVGs(el) {
+    el.querySelectorAll('svg').forEach(svg => {
+      if (svg.pauseAnimations) svg.pauseAnimations();
+    });
+  }
+
+  function showPhase(slide, idx) {
+    const phases = slide.querySelectorAll('.phase');
+    phases.forEach(p => {
+      const pStart = parseInt(p.dataset.phase);
+      const pEnd = parseInt(p.dataset.phaseEnd || pStart);
+      if (idx >= pStart && idx <= pEnd) {
+        p.classList.add('active');
+        restartSVGs(p);
+      } else {
+        p.classList.remove('active');
+        pauseSVGs(p);
+      }
+    });
+    // Activate card if applicable
+    if (slide.querySelector('[data-active-card]') && idx >= 1) {
+      activateCard(slide, idx);
+    }
+  }
+
+  // Pause all non-active phase SVGs on load
+  document.querySelectorAll('.phase:not(.active)').forEach(p => pauseSVGs(p));
+
+  function goToSlide(idx){
+    if(idx===currentSlide||idx<0||idx>=total||locked)return;
+    locked=true;const dir=idx>currentSlide?1:-1;
+    const leaving=slides[currentSlide],entering=slides[idx];
+    leaving.classList.add('exiting');leaving.style.transform=dir>0?'translateX(-50px)':'translateX(50px)';leaving.style.opacity='0';
+    entering.style.transition='none';entering.style.transform=dir>0?'translateX(50px)':'translateX(-50px)';entering.style.opacity='0';entering.classList.remove('active');
+    setTimeout(()=>{
+      leaving.classList.remove('active','exiting');leaving.style.transform='';leaving.style.opacity='';leaving.style.transition='';
+      pauseSVGs(leaving);
+      entering.offsetHeight;entering.style.transition='';entering.classList.add('entering');entering.offsetHeight;entering.classList.add('active');
+      currentSlide=idx;currentPhase=dir>0?0:pc(entering)-1;
+      showPhase(entering, currentPhase);
+      animateIn(entering);updateUI();
+      setTimeout(()=>{entering.classList.remove('entering');entering.style.transform='';entering.style.opacity='';locked=false},480);
+    },320);
+  }
+
+  function advance(){
+    if(locked)return;const s=slides[currentSlide],p=pc(s);
+    if(p>1&&currentPhase<p-1){locked=true;currentPhase++;showPhase(s,currentPhase);updateUI();setTimeout(()=>{locked=false},380)}
+    else if(currentSlide<total-1)goToSlide(currentSlide+1);
+  }
+  function retreat(){
+    if(locked)return;const s=slides[currentSlide],p=pc(s);
+    if(p>1&&currentPhase>0){locked=true;currentPhase--;showPhase(s,currentPhase);updateUI();setTimeout(()=>{locked=false},380)}
+    else if(currentSlide>0)goToSlide(currentSlide-1);
+  }
+
+  prevBtn.addEventListener('click',retreat);nextBtn.addEventListener('click',advance);
+  // keydown handled below by patched version
+  updateUI();animateIn(slides[0]);
+
+  // ── Growing diagram controller (Slide 5, phase 1) ──
+  // Three visual steps: 1=interface only  2=+AbstractBase  3=+AbstractRedis
+  let diagramStep = 1;
+
+  function setDiagramStep(step) {
+    diagramStep = step;
+    const svg      = document.getElementById('treeSvg');
+    const lBlue    = document.getElementById('linesBlue');
+    const lAbst    = document.getElementById('layerAbstract');
+    const lRedis   = document.getElementById('layerRedis');
+    const flatTok  = document.getElementById('flatToken');
+    const flatSlid = document.getElementById('flatSliding');
+    const lAbstFlat= document.getElementById('linesAbstractToFlat');
+    const lbl1 = document.getElementById('lbl1');
+    const lbl2 = document.getElementById('lbl2');
+    const lbl3 = document.getElementById('lbl3');
+    const title    = document.getElementById('diagramTitle');
+    const subtitle = document.getElementById('diagramSubtitle');
+    const slideNum = document.getElementById('diagramSlideNum');
+    if (!svg) return;
+
+    if (step === 1) {
+      svg.setAttribute('viewBox','0 0 780 360');
+      lBlue.style.opacity='1'; lAbst.style.opacity='0'; lRedis.style.opacity='0';
+      flatTok.style.opacity='1'; flatSlid.style.opacity='1';
+      [lbl1,lbl2,lbl3].forEach((l,i)=>l.style.opacity=(i===0?'1':'0'));
+      if(title) title.innerHTML='Introduce a common <span class="accent">interface</span>';
+      if(subtitle) subtitle.textContent='Caller only talks to the interface — not to any specific implementation.';
+      if(slideNum) slideNum.textContent='OOP \u00b7 Abstraction';
+    } else if (step === 2) {
+      svg.setAttribute('viewBox','0 0 780 360');
+      lBlue.style.opacity='0'; lAbst.style.opacity='1'; lRedis.style.opacity='0';
+      flatTok.style.opacity='1'; flatSlid.style.opacity='1';
+      if(lAbstFlat) lAbstFlat.style.opacity='1';
+      [lbl1,lbl2,lbl3].forEach((l,i)=>l.style.opacity=(i===1?'1':'0'));
+      if(title) title.innerHTML='Extract shared logic \u2192 <span class="accent">AbstractRateLimitStrategy</span>';
+      if(subtitle) subtitle.textContent='Validation lives here once \u2014 all subclasses inherit it automatically.';
+      if(slideNum) slideNum.textContent='OOP \u00b7 Inheritance';
+    } else if (step === 3) {
+      svg.setAttribute('viewBox','0 0 780 548');
+      lBlue.style.opacity='0'; lAbst.style.opacity='1'; lRedis.style.opacity='1';
+      flatTok.style.opacity='0'; flatSlid.style.opacity='0';
+      if(lAbstFlat) lAbstFlat.style.opacity='0';
+      [lbl1,lbl2,lbl3].forEach((l,i)=>l.style.opacity=(i===2?'1':'0'));
+      if(title) title.innerHTML='Both Redis strategies share Lua \u2192 <span class="accent">AbstractRedis</span>';
+      if(subtitle) subtitle.textContent="Each layer owns exactly one responsibility. That's Inheritance.";
+      if(slideNum) slideNum.textContent='OOP \u00b7 Inheritance';
+    }
+  }
+
+  // Patch advance/retreat: when on slide 5 phase 1, arrow keys grow the diagram
+  const _origAdvance = advance;
+  const _origRetreat = retreat;
+  function diagramAdvance() {
+    const s = slides[currentSlide];
+    if (s && s.dataset.slide === '5' && currentPhase === 1) {
+      if (diagramStep < 3) { setDiagramStep(diagramStep + 1); return; }
+    }
+    _origAdvance();
+  }
+  function diagramRetreat() {
+    const s = slides[currentSlide];
+    if (s && s.dataset.slide === '5' && currentPhase === 1) {
+      if (diagramStep > 1) { setDiagramStep(diagramStep - 1); return; }
+    }
+    _origRetreat();
+  }
+  prevBtn.removeEventListener('click', retreat);
+  nextBtn.removeEventListener('click', advance);
+  prevBtn.addEventListener('click', diagramRetreat);
+  nextBtn.addEventListener('click', diagramAdvance);
+  document.addEventListener('keydown', e => {
+    if (e.key==='ArrowRight'||e.key==='ArrowDown') diagramAdvance();
+    if (e.key==='ArrowLeft'||e.key==='ArrowUp') diagramRetreat();
+  });
+
+  // Click anywhere to advance (except back button)
+  document.querySelector('.deck').addEventListener('click', e => {
+    if (e.target.closest('#prevBtn') || e.target.closest('.dots')) return;
+    diagramAdvance();
+  });
+
+  // Reset diagram when leaving slide 5
+  const _origGoToSlide = goToSlide;
+  const _origGTS = goToSlide;
+})();
+</script>
+</body>
+</html>
