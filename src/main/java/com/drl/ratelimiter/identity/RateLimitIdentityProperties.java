@@ -60,6 +60,9 @@ public class RateLimitIdentityProperties {
      * @param forwardedHeaderName forwarded header name
      */
     public void setForwardedHeaderName(String forwardedHeaderName) {
-        this.forwardedHeaderName = forwardedHeaderName;
+        if (forwardedHeaderName == null || forwardedHeaderName.isBlank()) {
+            throw new IllegalArgumentException("forwardedHeaderName must not be blank");
+        }
+        this.forwardedHeaderName = forwardedHeaderName.trim();
     }
 }

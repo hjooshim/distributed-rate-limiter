@@ -29,15 +29,24 @@ public interface RateLimitStrategy {
      */
     RateLimitDecision evaluate(String key, int limit, long windowMs);
 
+    /**
+     * Convenience method that returns only the allow/reject outcome.
+     *
+     * @param key unique identifier for the rate-limit bucket
+     * @param limit maximum number of requests allowed within the window
+     * @param windowMs length of the time window in milliseconds
+     * @return {@code true} when the request is allowed
+     */
     default boolean isAllowed(String key, int limit, long windowMs) {
         return evaluate(key, limit, windowMs).isAllowed();
     }
 
-  /**
-   * Returns the name of this strategy. Used by StrategyRegistry to look up the correct
-   * implementation. Example: "FIXED_WINDOW", "SLIDING_WINDOW", "TOKEN_BUCKET"
-   */
-  default String getName() {
-    return null;
-  }
+    /**
+     * Returns the stable registry name for this strategy implementation.
+     *
+     * @return algorithm name such as {@code FIXED_WINDOW}, {@code SLIDING_WINDOW}, or {@code TOKEN_BUCKET}
+     */
+    default String getName() {
+        throw new UnsupportedOperationException("Strategy name must be provided by the implementation");
+    }
 }

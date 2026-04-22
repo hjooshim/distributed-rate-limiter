@@ -56,6 +56,13 @@ public class RateLimitAspect {
     private final ClientIdentityResolver clientIdentityResolver;
     private final MeterRegistry meterRegistry;
 
+    /**
+     * Creates the aspect that enforces method-level rate-limit policies.
+     *
+     * @param strategyRegistry registry used to resolve algorithm names
+     * @param clientIdentityResolver resolver used to derive the caller identity
+     * @param meterRegistry metrics registry used to record allow and reject counts
+     */
     public RateLimitAspect(
             StrategyRegistry strategyRegistry,
             ClientIdentityResolver clientIdentityResolver,

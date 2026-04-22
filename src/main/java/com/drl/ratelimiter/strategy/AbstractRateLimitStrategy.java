@@ -2,6 +2,7 @@ package com.drl.ratelimiter.strategy;
 
 /**
  * Base implementation for rate-limit strategies that share input validation and naming.
+ * Concrete strategies inherit the common guardrails here so they can focus only on algorithm behavior.
  */
 public abstract class AbstractRateLimitStrategy implements RateLimitStrategy {
 

@@ -2,6 +2,7 @@ package com.drl.ratelimiter.strategy;
 
 /**
  * Immutable result of evaluating a rate-limit request.
+ * This value object carries both the allow/reject outcome and the retry delay for rejected requests.
  */
 public final class RateLimitDecision {
 

@@ -1,6 +1,7 @@
 package com.drl.ratelimiter.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.util.ReflectionTestUtils.invokeMethod;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -61,7 +62,7 @@ class RateLimitIntegrationTest {
      */
     @BeforeEach
     void resetCounters() {
-        strategy.reset();
+        invokeMethod(strategy, "reset");
     }
 
     // ─────────────────────────────────────────────
@@ -168,6 +169,14 @@ class RateLimitIntegrationTest {
             mockMvc.perform(get("/api/free"))
                     .andExpect(status().isOk());
         }
+    }
+
+    @Test
+    @DisplayName("Demo endpoint response should match the configured token-bucket policy")
+    void tokenBucketDemoEndpoint_shouldExposeTheConfiguredPolicy() throws Exception {
+        mockMvc.perform(get("/api/token-bucket/demo"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.limit").value("5 per 10 seconds"));
     }
 
     // ─────────────────────────────────────────────

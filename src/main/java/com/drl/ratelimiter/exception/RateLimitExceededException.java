@@ -2,6 +2,7 @@ package com.drl.ratelimiter.exception;
 
 /**
  * Raised when a request is rejected by the rate limiter.
+ * It preserves the evaluated policy details so the HTTP layer can build a structured 429 response.
  */
 public class RateLimitExceededException extends RuntimeException {
 
@@ -21,6 +22,14 @@ public class RateLimitExceededException extends RuntimeException {
         this(key, limit, windowMs, Math.max(1L, (windowMs + 999L) / 1_000L));
     }
 
+    /**
+     * Creates an exception for a rejected request with an explicit retry delay.
+     *
+     * @param key unique rate-limit key for the rejected request
+     * @param limit configured maximum number of requests in the window
+     * @param windowMs configured window length in milliseconds
+     * @param retryAfterSeconds retry delay to return to the client
+     */
     public RateLimitExceededException(String key, int limit, long windowMs, long retryAfterSeconds) {
         super(String.format(
                 "Rate limit exceeded for key '%s': max %d requests per %dms",
@@ -61,6 +70,11 @@ public class RateLimitExceededException extends RuntimeException {
         return windowMs;
     }
 
+    /**
+     * Returns the suggested retry delay in seconds.
+     *
+     * @return retry delay that should be exposed to the client
+     */
     public long getRetryAfterSeconds() {
         return retryAfterSeconds;
     }

@@ -7,7 +7,8 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a method that should be checked by the rate limiter.
+ * Marks a method that should be checked by the rate limiter before business logic runs.
+ * The annotation carries the policy values that the aspect and strategy registry use at runtime.
  */
 @Documented
 @Target(ElementType.METHOD)

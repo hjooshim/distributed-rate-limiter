@@ -1,5 +1,6 @@
 package com.drl.ratelimiter.controller;
 
+import static org.springframework.test.util.ReflectionTestUtils.invokeMethod;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -42,7 +43,7 @@ class ClientIdentityIntegrationTest {
      */
     @BeforeEach
     void resetCounters() {
-        strategy.reset();
+        invokeMethod(strategy, "reset");
     }
 
     // ---------------------------------------------------------

@@ -2,6 +2,7 @@ package com.drl.ratelimiter.exception;
 
 /**
  * Raised when the distributed rate-limit backend cannot be reached safely.
+ * This exception lets the web layer fail closed instead of silently allowing traffic during backend errors.
  */
 public class RateLimitBackendUnavailableException extends RuntimeException {
 

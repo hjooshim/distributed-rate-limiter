@@ -71,6 +71,12 @@ public class StrategyRegistry {
         return strategy;
     }
 
+    /**
+     * Indicates whether a strategy is registered under the given name.
+     *
+     * @param name strategy name to check
+     * @return {@code true} when the registry contains that strategy
+     */
     public boolean contains(String name) {
         return strategies.containsKey(name);
     }

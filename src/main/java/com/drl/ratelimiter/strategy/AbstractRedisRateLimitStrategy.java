@@ -12,6 +12,7 @@ import org.springframework.util.StreamUtils;
 
 /**
  * Base class for Redis-backed strategies that share key construction and Lua execution.
+ * It keeps Redis integration concerns out of concrete algorithms so each subclass can focus on its policy logic.
  */
 public abstract class AbstractRedisRateLimitStrategy extends AbstractRateLimitStrategy {
 

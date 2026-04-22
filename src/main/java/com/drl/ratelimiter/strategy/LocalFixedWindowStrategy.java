@@ -56,6 +56,9 @@ public class LocalFixedWindowStrategy extends AbstractRateLimitStrategy {
             = new ConcurrentHashMap<>();
     private final AtomicLong totalRequests = new AtomicLong(0);
 
+    /**
+     * Creates the in-memory fixed-window strategy.
+     */
     public LocalFixedWindowStrategy() {
         super("FIXED_WINDOW");
     }
@@ -141,7 +144,7 @@ public class LocalFixedWindowStrategy extends AbstractRateLimitStrategy {
      * shared in-memory state between test cases without restarting
      * the Spring context.
      */
-    public void reset() {
+    void reset() {
         counters.clear();
         totalRequests.set(0);
     }

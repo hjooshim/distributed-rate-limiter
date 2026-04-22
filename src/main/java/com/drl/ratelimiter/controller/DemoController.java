@@ -9,11 +9,18 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * Demo endpoints used to show how {@link RateLimit} is applied.
+ * Demo endpoints used to show how {@link RateLimit} is applied across multiple policies.
+ * The responses intentionally echo the configured limits so demos and tests can verify policy isolation.
  */
 @RestController
 @RequestMapping("/api")
 public class DemoController {
+
+    private static final String STRICT_LIMIT_LABEL = "3 per 10 seconds";
+    private static final String NORMAL_LIMIT_LABEL = "10 per minute";
+    private static final String TOKEN_BUCKET_PRIMARY_LIMIT_LABEL = "1 per minute";
+    private static final String TOKEN_BUCKET_DEMO_LIMIT_LABEL = "5 per 10 seconds";
+    private static final String SLIDING_WINDOW_LIMIT_LABEL = "3 per 10 seconds";
 
     /**
      * Endpoint with a strict policy.
@@ -25,7 +32,7 @@ public class DemoController {
     public Map<String, Object> strictEndpoint() {
         return Map.of(
                 "message", "Strict endpoint",
-                "limit", "3 per 10 seconds",
+                "limit", STRICT_LIMIT_LABEL,
                 "timestamp", Instant.now().toString()
         );
     }
@@ -40,7 +47,7 @@ public class DemoController {
     public Map<String, Object> normalEndpoint() {
         return Map.of(
                 "message", "Normal endpoint",
-                "limit", "10 per minute",
+                "limit", NORMAL_LIMIT_LABEL,
                 "timestamp", Instant.now().toString()
         );
     }
@@ -55,7 +62,7 @@ public class DemoController {
     public Map<String, Object> tokenBucketPrimaryEndpoint() {
         return Map.of(
                 "message", "Token bucket primary endpoint",
-                "limit", "1 per minute",
+                "limit", TOKEN_BUCKET_PRIMARY_LIMIT_LABEL,
                 "timestamp", Instant.now().toString()
         );
     }
@@ -70,7 +77,7 @@ public class DemoController {
     public Map<String, Object> tokenBucketDemoEndpoint() {
         return Map.of(
                 "message", "Token bucket secondary endpoint",
-                "limit", "1 per minute",
+                "limit", TOKEN_BUCKET_DEMO_LIMIT_LABEL,
                 "timestamp", Instant.now().toString()
         );
     }
@@ -85,7 +92,7 @@ public class DemoController {
     public Map<String, Object> slidingWindowPrimaryEndpoint() {
         return Map.of(
                 "message", "Sliding window primary endpoint",
-                "limit", "3 per 10 seconds",
+                "limit", SLIDING_WINDOW_LIMIT_LABEL,
                 "timestamp", Instant.now().toString()
         );
     }
@@ -100,7 +107,7 @@ public class DemoController {
     public Map<String, Object> slidingWindowSecondaryEndpoint() {
         return Map.of(
                 "message", "Sliding window secondary endpoint",
-                "limit", "3 per 10 seconds",
+                "limit", SLIDING_WINDOW_LIMIT_LABEL,
                 "timestamp", Instant.now().toString()
         );
     }

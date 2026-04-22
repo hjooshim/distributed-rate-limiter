@@ -10,7 +10,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Converts rate-limit failures into structured HTTP responses.
+ * Converts rate-limit failures into structured HTTP responses for API clients.
+ * Keeping this logic centralized avoids duplicating error-shaping code across controllers and aspects.
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {

@@ -60,6 +60,9 @@ public class RateLimitAlgorithmValidator implements SmartLifecycle {
         this.strategyRegistry = strategyRegistry;
     }
 
+    /**
+     * Starts the validator and fails application startup if any annotation references an unknown algorithm.
+     */
     @Override
     public void start() {
         // Collect every invalid configuration first so startup fails with one
@@ -117,16 +120,29 @@ public class RateLimitAlgorithmValidator implements SmartLifecycle {
         running = true;
     }
 
+    /**
+     * Marks the lifecycle component as stopped.
+     */
     @Override
     public void stop() {
         running = false;
     }
 
+    /**
+     * Indicates whether startup validation has completed successfully.
+     *
+     * @return {@code true} when validation has run and the component is marked started
+     */
     @Override
     public boolean isRunning() {
         return running;
     }
 
+    /**
+     * Returns the startup phase for this lifecycle component.
+     *
+     * @return the earliest possible phase so validation runs before later startup work
+     */
     @Override
     public int getPhase() {
         // Run as early as possible so invalid configuration stops the
@@ -134,11 +150,21 @@ public class RateLimitAlgorithmValidator implements SmartLifecycle {
         return Integer.MIN_VALUE;
     }
 
+    /**
+     * Indicates that Spring should start this validator automatically during context startup.
+     *
+     * @return always {@code true}
+     */
     @Override
     public boolean isAutoStartup() {
         return true;
     }
 
+    /**
+     * Stops the validator and signals completion through the lifecycle callback.
+     *
+     * @param callback callback to notify once shutdown work has completed
+     */
     @Override
     public void stop(Runnable callback) {
         // SmartLifecycle requires the asynchronous-style callback variant.
